@@ -13,7 +13,7 @@ import os
 # =============================================
 
 THEME_WORD_PAIRS = [
-    ("Medsos", ["Instagram", "Twitter", "Facebook", "Youtube", "Tiktok", "Pinterest", "Snapchat", "Disocrd"]),
+    ("Medsos", ["Instagram", "Twitter", "Facebook", "Youtube", "Tiktok", "Pinterest", "Snapchat", "Discord"]),
     ("Olahraga", ["Sepak Bola", "Basket", "Tenis", "Renang", "Badminton", "Voli", "Golf", "Baseball"]),
     ("Presiden RI", ["Dokter", "Guru", "Gusdur", "Habibi", "Soeharto", "Soekarno", "Megawati", "Susilo Bambang Yudhoyono", "Jokowi"]),
     ("Profesi", ["Dokter", "Guru", "Polisi", "Chef", "Pilot", "Programmer", "Artist", "Lawyer", "Dosen"]),
@@ -30,7 +30,7 @@ MIN_PLAYERS = 2
 MAX_SESSIONS = 5
 DISCUSSION_TIME = 30  # seconds
 VOTE_TIME = 30  # seconds
-CLUE_TIMEOUT = 30  # seconds for each player to give clue
+CLUE_TIMEOUT = 45  # seconds for each player to give clue (increased slightly for modal)
 
 # Initialize database
 def init_db():
@@ -212,23 +212,26 @@ class WhosLyingGame:
         # Notify channel about current clue giver
         embed = discord.Embed(
             title=f"🎭 Giliran Memberikan Clue - Session {self.current_session}/{self.max_sessions}",
-            description=f"Sekarang giliran **{next_player.display_name}** untuk memberikan clue!\n\n⏳ Waktu: {CLUE_TIMEOUT} detik",
+            description=f"Sekarang giliran **{next_player.display_name}** untuk memberikan clue!\n\nKlik tombol **📝 Berikan Clue** di bawah!\n⏳ Waktu: {CLUE_TIMEOUT} detik",
             color=discord.Color.blue()
         )
-        await channel.send(embed=embed)
+        
+        # Add Give Clue Button
+        view = GiveClueView(cog, self)
+        await channel.send(embed=embed, view=view)
         
         # Send DM reminder to the player
         try:
             if next_player == self.impostor:
                 embed = discord.Embed(
                     title="🎭 Giliranmu Memberikan Clue!",
-                    description=f"**Tema:** {self.current_theme}\n\n❗ Kamu adalah IMPOSTOR! Berikan clue yang tidak terlalu spesifik!\n\nGunakan command `/wl_clue [clue]` di channel game untuk memberikan clue.",
+                    description=f"**Tema:** {self.current_theme}\n\n❗ Kamu adalah IMPOSTOR! Berikan clue yang tidak terlalu spesifik!",
                     color=discord.Color.red()
                 )
             else:
                 embed = discord.Embed(
                     title="🔍 Giliranmu Memberikan Clue!",
-                    description=f"**Tema:** {self.current_theme}\n**Kata:** ||{self.current_word}||\n\nGunakan command `/wl_clue [clue]` di channel game untuk memberikan clue.",
+                    description=f"**Tema:** {self.current_theme}\n**Kata:** ||{self.current_word}||\n\nBerikan clue yang berhubungan dengan kata ini!",
                     color=discord.Color.green()
                 )
             await next_player.send(embed=embed)
@@ -282,6 +285,66 @@ class WhosLyingGame:
         
         # Clear game state from database
         self.save_game_state()
+
+# ==========================================
+# NEW: Clue Modal & View
+# ==========================================
+
+class ClueModal(discord.ui.Modal, title="Berikan Clue"):
+    clue_input = discord.ui.TextInput(
+        label="Clue Kamu",
+        placeholder="Tulis clue yang berhubungan dengan kata...",
+        max_length=100
+    )
+
+    def __init__(self, cog, game):
+        super().__init__()
+        self.cog = cog
+        self.game = game
+
+    async def on_submit(self, interaction: discord.Interaction):
+        clue = self.clue_input.value
+        
+        self.game.clues_given[interaction.user.id] = clue
+        self.game.save_game_state()
+        
+        await interaction.response.send_message(f"✅ Clue berhasil diberikan: \"{clue}\"", ephemeral=True)
+        
+        # Cancel timeout task if it exists
+        if self.game.clue_timeout_task:
+            self.game.clue_timeout_task.cancel()
+        
+        # Move to next player
+        await self.game.next_player_turn(self.cog)
+
+class GiveClueView(discord.ui.View):
+    def __init__(self, cog, game):
+        super().__init__(timeout=CLUE_TIMEOUT)
+        self.cog = cog
+        self.game = game
+
+    @discord.ui.button(label="📝 Berikan Clue", style=discord.ButtonStyle.primary)
+    async def give_clue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.game.current_clue_giver:
+            await interaction.response.send_message(
+                f"❌ Sekarang bukan giliranmu! Giliran **{self.game.current_clue_giver.display_name}**.",
+                ephemeral=True
+            )
+            return
+        
+        await interaction.response.send_modal(ClueModal(self.cog, self.game))
+
+    async def on_timeout(self):
+        # Disable button on timeout
+        for item in self.children:
+            item.disabled = True
+        # We don't need to edit the message here necessarily as the game loop handles the timeout logic
+        # but disabling the button is good UX.
+        pass
+
+# ==========================================
+# EXISTING VIEWS (Unchanged mostly)
+# ==========================================
 
 class GameResultView(discord.ui.View):
     def __init__(self, cog, game: WhosLyingGame):
@@ -555,7 +618,7 @@ class ImpostorVoteView(discord.ui.View):
         super().__init__(timeout=30)  # 30 second timeout
         self.game = game
         self.cog = cog
-        self.update_options()
+        self.create_buttons()
         self.timeout_task = asyncio.create_task(self.vote_timeout())
     
     async def vote_timeout(self):
@@ -563,88 +626,74 @@ class ImpostorVoteView(discord.ui.View):
         if self.game.session_phase == "voting_impostor":
             await self.on_timeout()
     
-    def update_options(self):
+    def create_buttons(self):
         self.clear_items()
         
-        select = discord.ui.Select(
-            placeholder="Pilih siapa yang menurut kamu impostor...",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(
-                    label=player.display_name,
-                    description=f"Vote {player.display_name} sebagai impostor",
-                    emoji="🎯",
-                    value=str(player.id),
-                    default=(player.id in self.game.impostor_votes.values())
-                )
-                for player in self.game.players
-            ]
-        )
-        select.callback = self.impostor_select
-        self.add_item(select)
-    
-    async def impostor_select(self, interaction: discord.Interaction):
-        if interaction.user not in self.game.players:
-            await interaction.response.send_message("❌ Kamu bukan pemain dalam game ini!", ephemeral=True)
-            return
-        
-        if interaction.user.id in self.game.voted_players:
-            await interaction.response.send_message("❌ Kamu sudah memberikan vote!", ephemeral=True)
-            return
-        
-        selected_player_id = int(interaction.data['values'][0])
-        selected_player = discord.utils.get(self.game.players, id=selected_player_id)
-        
-        if not selected_player:
-            await interaction.response.send_message("❌ Player tidak ditemukan!", ephemeral=True)
-            return
-        
-        if interaction.user.id == selected_player_id:
-            await interaction.response.send_message("❌ Kamu tidak bisa memilih diri sendiri!", ephemeral=True)
-            return
-        
-        self.game.impostor_votes[interaction.user.id] = selected_player_id
-        self.game.voted_players.add(interaction.user.id)
-        
-        await interaction.response.send_message(f"🗳️ {interaction.user.display_name} memilih **{selected_player.display_name}**")
-        
-        # Update the view to show current selections
-        self.update_options()
-        
-        vote_counts = {}
-        for voted_player_id in self.game.impostor_votes.values():
-            vote_counts[voted_player_id] = vote_counts.get(voted_player_id, 0) + 1
-        
-        embed = discord.Embed(
-            title="🎯 Voting Impostor!",
-            description=f"**{len(self.game.voted_players)}/{len(self.game.players)}** pemain sudah vote\n\n⚠️ **Peraturan:**\n• Setiap pemain hanya bisa vote **1 kali**\n• Tidak bisa memilih diri sendiri",
-            color=discord.Color.red()
-        )
-        
-        if vote_counts:
-            vote_results = []
-            for player_id, votes in sorted(vote_counts.items(), key=lambda x: x[1], reverse=True):
-                player = discord.utils.get(self.game.players, id=player_id)
-                if player:
-                    vote_results.append(f"**{player.display_name}:** {votes} vote(s)")
-            embed.add_field(name="📊 Hasil Sementara", value="\n".join(vote_results), inline=False)
-        
-        not_voted = []
         for player in self.game.players:
-            if player.id not in self.game.voted_players:
-                not_voted.append(player.display_name)
+            button = discord.ui.Button(
+                label=f"Vote {player.display_name}",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"vote_impostor_{player.id}",
+                emoji="🎯"
+            )
+            button.callback = self.create_vote_callback(player.id, player.display_name)
+            self.add_item(button)
+
+    def create_vote_callback(self, target_id: int, target_name: str):
+        async def vote_callback(interaction: discord.Interaction):
+            if interaction.user not in self.game.players:
+                await interaction.response.send_message("❌ Kamu bukan pemain dalam game ini!", ephemeral=True)
+                return
+            
+            if interaction.user.id in self.game.voted_players:
+                await interaction.response.send_message("❌ Kamu sudah memberikan vote!", ephemeral=True)
+                return
+            
+            if interaction.user.id == target_id:
+                await interaction.response.send_message("❌ Kamu tidak bisa memilih diri sendiri!", ephemeral=True)
+                return
+            
+            self.game.impostor_votes[interaction.user.id] = target_id
+            self.game.voted_players.add(interaction.user.id)
+            
+            await interaction.response.send_message(f"🗳️ {interaction.user.display_name} memilih **{target_name}**")
+            
+            # Update Embed to show progress
+            vote_counts = {}
+            for voted_player_id in self.game.impostor_votes.values():
+                vote_counts[voted_player_id] = vote_counts.get(voted_player_id, 0) + 1
+            
+            embed = discord.Embed(
+                title="🎯 Voting Impostor!",
+                description=f"**{len(self.game.voted_players)}/{len(self.game.players)}** pemain sudah vote\n\n⚠️ **Peraturan:**\n• Setiap pemain hanya bisa vote **1 kali**\n• Tidak bisa memilih diri sendiri",
+                color=discord.Color.red()
+            )
+            
+            if vote_counts:
+                vote_results = []
+                for player_id, votes in sorted(vote_counts.items(), key=lambda x: x[1], reverse=True):
+                    player = discord.utils.get(self.game.players, id=player_id)
+                    if player:
+                        vote_results.append(f"**{player.display_name}:** {votes} vote(s)")
+                embed.add_field(name="📊 Hasil Sementara", value="\n".join(vote_results), inline=False)
+            
+            not_voted = []
+            for player in self.game.players:
+                if player.id not in self.game.voted_players:
+                    not_voted.append(player.display_name)
+            
+            if not_voted:
+                embed.add_field(name="⏳ Belum Vote", value=", ".join(not_voted), inline=False)
+            
+            try:
+                await interaction.message.edit(embed=embed, view=self)
+            except:
+                pass
+            
+            if len(self.game.voted_players) == len(self.game.players):
+                await self.cog.end_game(interaction.followup, self.game)
         
-        if not_voted:
-            embed.add_field(name="⏳ Belum Vote", value=", ".join(not_voted), inline=False)
-        
-        try:
-            await interaction.message.edit(embed=embed, view=self)
-        except:
-            pass
-        
-        if len(self.game.voted_players) == len(self.game.players):
-            await self.cog.end_game(interaction.followup, self.game)
+        return vote_callback
     
     async def on_timeout(self):
         channel = self.cog.client.get_channel(self.game.channel_id)
@@ -1088,13 +1137,19 @@ class WhosLying(commands.Cog):
         """Cleanup the game channel"""
         game.reset_game()
         
-        # Hapus semua pesan kecuali control panel
+        # OPTIMIZED CLEANUP: Purge messages instead of iterating history
+        # Keep the control panel message if possible
+        
+        def is_not_control_panel(m):
+            return m.id != game.control_panel_message.id if game.control_panel_message else True
+
         try:
-            async for message in channel.history(limit=None):
-                if message.id != game.control_panel_message.id:
-                    await message.delete()
+            # Delete last 100 messages that aren't the control panel
+            await channel.purge(limit=100, check=is_not_control_panel)
         except discord.Forbidden:
-            pass  # Tidak ada izin untuk menghapus pesan
+            pass  # No permission
+        except Exception as e:
+            print(f"Error purging channel: {e}")
         
         # Update control panel
         embed = self.create_lobby_embed(game)
@@ -1119,13 +1174,14 @@ class WhosLying(commands.Cog):
         """Cleanup and restart the game"""
         game.reset_game()
         
-        # Hapus semua pesan kecuali control panel
+        # OPTIMIZED CLEANUP
+        def is_not_control_panel(m):
+            return m.id != game.control_panel_message.id if game.control_panel_message else True
+
         try:
-            async for message in channel.history(limit=None):
-                if message.id != game.control_panel_message.id:
-                    await message.delete()
+            await channel.purge(limit=100, check=is_not_control_panel)
         except discord.Forbidden:
-            pass  # Tidak ada izin untuk menghapus pesan
+            pass
         
         # Update control panel
         embed = self.create_lobby_embed(game)
@@ -1151,47 +1207,5 @@ class WhosLying(commands.Cog):
             if game.start_game():
                 await self.start_game_sequence(game)
 
-    @app_commands.command(name="wl_clue", description="Berikan clue untuk game Who's Lying")
-    @app_commands.describe(clue="Clue yang ingin diberikan")
-    async def give_clue(self, interaction: discord.Interaction, clue: str):
-        """Handle player giving a clue"""
-        game = self.get_or_create_game(interaction.channel.id)
-        
-        if not game.game_active:
-            await interaction.response.send_message("❌ Tidak ada game yang sedang berlangsung!", ephemeral=True)
-            return
-            
-        if interaction.user not in game.players:
-            await interaction.response.send_message("❌ Kamu bukan pemain dalam game ini!", ephemeral=True)
-            return
-            
-        if game.session_phase != "clue_giving":
-            await interaction.response.send_message("❌ Bukan waktunya memberikan clue!", ephemeral=True)
-            return
-            
-        if interaction.user.id in game.clues_given:
-            await interaction.response.send_message("❌ Kamu sudah memberikan clue!", ephemeral=True)
-            return
-            
-        if interaction.user != game.current_clue_giver:
-            await interaction.response.send_message(
-                f"❌ Sekarang bukan giliranmu! Giliran {game.current_clue_giver.display_name}",
-                ephemeral=True
-            )
-            return
-            
-        game.clues_given[interaction.user.id] = clue
-        game.save_game_state()
-        
-        await interaction.response.send_message(f"✅ Clue berhasil diberikan: \"{clue}\"", ephemeral=True)
-        
-        # Cancel timeout task if it exists
-        if game.clue_timeout_task:
-            game.clue_timeout_task.cancel()
-        
-        # Move to next player
-        await game.next_player_turn(self)
-
 async def setup(client):
     await client.add_cog(WhosLying(client))
-# Maintenance update

@@ -5,6 +5,8 @@ import sqlite3
 import os
 from datetime import datetime
 import asyncio
+import random
+import string
 
 class TicketDatabase:
     def __init__(self, db_name="database.db"):
@@ -22,9 +24,16 @@ class TicketDatabase:
                 category_id INTEGER,
                 log_channel_id INTEGER,
                 panel_channel_id INTEGER,
-                panel_message_id INTEGER
+                panel_message_id INTEGER,
+                support_role_id INTEGER
             )
         ''')
+        
+        # Migration: Add support_role_id if it doesn't exist (for existing databases)
+        try:
+            cursor.execute("ALTER TABLE guild_config ADD COLUMN support_role_id INTEGER")
+        except sqlite3.OperationalError:
+            pass # Column likely already exists
         
         # Tabel untuk tracking tiket aktif
         cursor.execute('''
@@ -32,45 +41,56 @@ class TicketDatabase:
                 channel_id INTEGER PRIMARY KEY,
                 guild_id INTEGER,
                 user_id INTEGER,
-                created_at TEXT
+                created_at TEXT,
+                reason TEXT
             )
         ''')
+
+        # Migration: Add reason if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE active_tickets ADD COLUMN reason TEXT")
+        except sqlite3.OperationalError:
+            pass
         
         conn.commit()
         conn.close()
     
     def set_category(self, guild_id: int, category_id: int):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO guild_config (guild_id, category_id) 
-            VALUES (?, ?)
-            ON CONFLICT(guild_id) DO UPDATE SET category_id = ?
-        ''', (guild_id, category_id, category_id))
-        conn.commit()
-        conn.close()
-    
+        self._update_config(guild_id, "category_id", category_id)
+
     def set_log_channel(self, guild_id: int, channel_id: int):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO guild_config (guild_id, log_channel_id) 
-            VALUES (?, ?)
-            ON CONFLICT(guild_id) DO UPDATE SET log_channel_id = ?
-        ''', (guild_id, channel_id, channel_id))
-        conn.commit()
-        conn.close()
+        self._update_config(guild_id, "log_channel_id", channel_id)
+
+    def set_support_role(self, guild_id: int, role_id: int):
+        self._update_config(guild_id, "support_role_id", role_id)
     
     def set_panel(self, guild_id: int, channel_id: int, message_id: int):
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO guild_config (guild_id, panel_channel_id, panel_message_id) 
-            VALUES (?, ?, ?)
-            ON CONFLICT(guild_id) DO UPDATE SET 
-                panel_channel_id = ?,
-                panel_message_id = ?
-        ''', (guild_id, channel_id, message_id, channel_id, message_id))
+        # Check if exists first to decide INSERT or UPDATE (or use UPSERT syntax)
+        cursor.execute('SELECT guild_id FROM guild_config WHERE guild_id = ?', (guild_id,))
+        if cursor.fetchone():
+            cursor.execute('''
+                UPDATE guild_config 
+                SET panel_channel_id = ?, panel_message_id = ?
+                WHERE guild_id = ?
+            ''', (channel_id, message_id, guild_id))
+        else:
+            cursor.execute('''
+                INSERT INTO guild_config (guild_id, panel_channel_id, panel_message_id) 
+                VALUES (?, ?, ?)
+            ''', (guild_id, channel_id, message_id))
+        conn.commit()
+        conn.close()
+
+    def _update_config(self, guild_id: int, column: str, value: int):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('SELECT guild_id FROM guild_config WHERE guild_id = ?', (guild_id,))
+        if cursor.fetchone():
+            cursor.execute(f'UPDATE guild_config SET {column} = ? WHERE guild_id = ?', (value, guild_id))
+        else:
+            cursor.execute(f'INSERT INTO guild_config (guild_id, {column}) VALUES (?, ?)', (guild_id, value))
         conn.commit()
         conn.close()
     
@@ -82,22 +102,25 @@ class TicketDatabase:
         conn.close()
         
         if result:
+            # Map based on schema order
+            # 0: guild_id, 1: category_id, 2: log_channel_id, 3: panel_channel_id, 4: panel_message_id, 5: support_role_id
             return {
                 'guild_id': result[0],
                 'category_id': result[1],
                 'log_channel_id': result[2],
                 'panel_channel_id': result[3],
-                'panel_message_id': result[4]
+                'panel_message_id': result[4],
+                'support_role_id': result[5] if len(result) > 5 else None
             }
         return None
     
-    def add_ticket(self, channel_id: int, guild_id: int, user_id: int):
+    def add_ticket(self, channel_id: int, guild_id: int, user_id: int, reason: str = None):
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO active_tickets (channel_id, guild_id, user_id, created_at)
-            VALUES (?, ?, ?, ?)
-        ''', (channel_id, guild_id, user_id, datetime.now().isoformat()))
+            INSERT INTO active_tickets (channel_id, guild_id, user_id, created_at, reason)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (channel_id, guild_id, user_id, datetime.now().isoformat(), reason))
         conn.commit()
         conn.close()
     
@@ -119,6 +142,24 @@ class TicketDatabase:
         conn.close()
         return result[0] if result else None
 
+class TicketModal(discord.ui.Modal, title="Buat Tiket Baru"):
+    reason = discord.ui.TextInput(
+        label="Subjek / Alasan",
+        style=discord.TextStyle.paragraph,
+        placeholder="Jelaskan masalah atau pertanyaan Anda secara singkat...",
+        required=True,
+        max_length=500
+    )
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        cog = self.bot.get_cog('Ticket')
+        if cog:
+            await cog.create_ticket_for_user(interaction, self.reason.value)
+
 class TicketControlPanel(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=None)
@@ -131,9 +172,8 @@ class TicketControlPanel(discord.ui.View):
         emoji="📩"
     )
     async def create_ticket_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cog = self.bot.get_cog('Ticket')
-        if cog:
-            await cog.create_ticket_for_user(interaction)
+        # Open Modal instead of creating ticket directly
+        await interaction.response.send_modal(TicketModal(self.bot))
 
 class TicketCloseView(discord.ui.View):
     def __init__(self, bot):
@@ -171,26 +211,15 @@ class Ticket(commands.Cog):
             description="Gunakan tombol di bawah untuk mengatur sistem tiket:",
             color=discord.Color.blue()
         )
-        embed.add_field(
-            name="📁 Set Category",
-            value="Pilih kategori untuk channel tiket",
-            inline=False
-        )
-        embed.add_field(
-            name="📝 Set Log Channel",
-            value="Pilih channel untuk log tiket yang ditutup",
-            inline=False
-        )
-        embed.add_field(
-            name="🎮 Send Control Panel",
-            value="Kirim panel untuk user membuat tiket",
-            inline=False
-        )
+        embed.add_field(name="📁 Set Category", value="Pilih kategori untuk channel tiket", inline=False)
+        embed.add_field(name="📝 Set Log Channel", value="Pilih channel untuk log tiket", inline=False)
+        embed.add_field(name="🛡️ Set Support Role", value="Pilih role yang bisa akses tiket", inline=False)
+        embed.add_field(name="🎮 Send Control Panel", value="Kirim panel tiket ke channel", inline=False)
         
         view = SetupView(self.db, self.bot)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    async def create_ticket_for_user(self, interaction: discord.Interaction):
+    async def create_ticket_for_user(self, interaction: discord.Interaction, reason: str):
         await interaction.response.defer(ephemeral=True)
         
         guild = interaction.guild
@@ -218,7 +247,6 @@ class Ticket(commands.Cog):
                 ), ephemeral=True)
                 return
             else:
-                # Channel sudah terhapus, bersihkan database
                 self.db.remove_ticket(existing_ticket_id)
         
         # Ambil kategori
@@ -250,7 +278,19 @@ class Ticket(commands.Cog):
             )
         }
         
-        # Tambahkan permission untuk admin
+        # Tambahkan permission untuk Support Role
+        if config.get('support_role_id'):
+            support_role = guild.get_role(config['support_role_id'])
+            if support_role:
+                overwrites[support_role] = discord.PermissionOverwrite(
+                    read_messages=True,
+                    send_messages=True,
+                    attach_files=True,
+                    embed_links=True,
+                    read_message_history=True
+                )
+
+        # Tambahkan permission untuk admin (backup)
         for role in guild.roles:
             if role.permissions.administrator:
                 overwrites[role] = discord.PermissionOverwrite(
@@ -259,8 +299,6 @@ class Ticket(commands.Cog):
                 )
         
         # Buat channel dengan kode unik
-        import random
-        import string
         unique_code = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
         channel_name = f"ticket-{unique_code}"
         try:
@@ -272,24 +310,29 @@ class Ticket(commands.Cog):
             )
             
             # Simpan ke database
-            self.db.add_ticket(ticket_channel.id, guild.id, author.id)
+            self.db.add_ticket(ticket_channel.id, guild.id, author.id, reason)
             
             # Embed untuk channel tiket
             ticket_embed = discord.Embed(
-                title="🎟️ Tiket Dibuka",
-                description=f"Halo {author.mention}!\n\nSilakan sampaikan pertanyaan atau masalahmu di sini.\nTim support kami akan segera membantu.",
+                title="🎟️ Tiket Baru",
+                description=f"Halo {author.mention}!\nTerima kasih telah menghubungi support.",
                 color=discord.Color.blue(),
                 timestamp=datetime.now()
             )
             ticket_embed.add_field(
-                name="📌 Informasi",
-                value="• Jelaskan masalahmu dengan detail\n• Tunggu respon dari staff\n• Admin dapat menutup tiket dengan tombol di bawah",
+                name="📋 Subjek / Masalah",
+                value=f"```{reason}```",
                 inline=False
             )
-            ticket_embed.set_footer(text=f"User ID: {author.id}")
+            ticket_embed.set_footer(text=f"User ID: {author.id} • Ticket ID: {unique_code}")
+            
+            # Mention user and support role
+            content = f"{author.mention}"
+            if config.get('support_role_id'):
+                content += f" <@&{config['support_role_id']}>"
             
             await ticket_channel.send(
-                content=author.mention,
+                content=content,
                 embed=ticket_embed,
                 view=TicketCloseView(self.bot)
             )
@@ -297,7 +340,7 @@ class Ticket(commands.Cog):
             # Konfirmasi ke user
             await interaction.followup.send(embed=discord.Embed(
                 title="✅ Tiket Berhasil Dibuat",
-                description=f"Tiket kamu telah dibuat: {ticket_channel.mention}\n\nSilakan jelaskan masalahmu di sana!",
+                description=f"Tiket kamu telah dibuat: {ticket_channel.mention}",
                 color=discord.Color.green()
             ), ephemeral=True)
             
@@ -309,11 +352,20 @@ class Ticket(commands.Cog):
             ), ephemeral=True)
 
     async def close_ticket(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        # Cek permission
-        if not interaction.user.guild_permissions.administrator:
+        # Cek permission (Admin OR Support Role)
+        is_admin = interaction.user.guild_permissions.administrator
+        is_support = False
+        
+        config = self.db.get_config(interaction.guild.id)
+        if config and config.get('support_role_id'):
+            support_role = interaction.guild.get_role(config['support_role_id'])
+            if support_role and support_role in interaction.user.roles:
+                is_support = True
+        
+        if not (is_admin or is_support):
             await interaction.response.send_message(embed=discord.Embed(
                 title="❌ Akses Ditolak",
-                description="Hanya administrator yang dapat menutup tiket.",
+                description="Hanya Administrator atau Staff Support yang dapat menutup tiket.",
                 color=discord.Color.red()
             ), ephemeral=True)
             return
@@ -321,9 +373,6 @@ class Ticket(commands.Cog):
         await interaction.response.defer()
         
         try:
-            # Ambil konfigurasi untuk log channel
-            config = self.db.get_config(interaction.guild.id)
-            
             # Buat transcript
             messages = []
             async for message in channel.history(limit=None, oldest_first=True):
@@ -390,7 +439,7 @@ class Ticket(commands.Cog):
             await channel.delete(reason=f"Tiket ditutup oleh {interaction.user}")
             
         except discord.NotFound:
-            pass  # Channel sudah dihapus
+            pass
         except Exception as e:
             try:
                 await interaction.followup.send(embed=discord.Embed(
@@ -409,27 +458,19 @@ class SetupView(discord.ui.View):
     
     @discord.ui.button(label="Set Category", style=discord.ButtonStyle.primary, emoji="📁")
     async def set_category(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            "Pilih kategori untuk tiket:",
-            view=CategorySelect(self.db),
-            ephemeral=True
-        )
+        await interaction.response.send_message("Pilih kategori untuk tiket:", view=CategorySelect(self.db), ephemeral=True)
     
     @discord.ui.button(label="Set Log Channel", style=discord.ButtonStyle.primary, emoji="📝")
     async def set_log(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            "Pilih channel untuk log tiket:",
-            view=LogChannelSelect(self.db),
-            ephemeral=True
-        )
+        await interaction.response.send_message("Pilih channel untuk log tiket:", view=LogChannelSelect(self.db), ephemeral=True)
+
+    @discord.ui.button(label="Set Support Role", style=discord.ButtonStyle.primary, emoji="🛡️")
+    async def set_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Pilih role untuk staff support:", view=SupportRoleSelect(self.db), ephemeral=True)
     
     @discord.ui.button(label="Send Control Panel", style=discord.ButtonStyle.success, emoji="🎮")
     async def send_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            "Pilih channel untuk control panel:",
-            view=PanelChannelSelect(self.db, self.bot),
-            ephemeral=True
-        )
+        await interaction.response.send_message("Pilih channel untuk control panel:", view=PanelChannelSelect(self.db, self.bot), ephemeral=True)
 
 class CategorySelect(discord.ui.View):
     def __init__(self, db: TicketDatabase):
@@ -440,24 +481,12 @@ class CategorySelect(discord.ui.View):
         cls=discord.ui.ChannelSelect, 
         channel_types=[discord.ChannelType.category], 
         placeholder="Pilih kategori...",
-        min_values=1,
-        max_values=1
+        min_values=1, max_values=1
     )
     async def category_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
         category = select.values[0]
         self.db.set_category(interaction.guild.id, category.id)
-        
-        embed = discord.Embed(
-            title="✅ Berhasil",
-            description=f"Kategori tiket diatur ke: **{category.name}**",
-            color=discord.Color.green()
-        )
-        
-        await interaction.response.edit_message(
-            content=None,
-            embed=embed,
-            view=None
-        )
+        await interaction.response.edit_message(content=None, embed=discord.Embed(title="✅ Berhasil", description=f"Kategori tiket diatur ke: **{category.name}**", color=discord.Color.green()), view=None)
 
 class LogChannelSelect(discord.ui.View):
     def __init__(self, db: TicketDatabase):
@@ -468,24 +497,27 @@ class LogChannelSelect(discord.ui.View):
         cls=discord.ui.ChannelSelect, 
         channel_types=[discord.ChannelType.text], 
         placeholder="Pilih channel log...",
-        min_values=1,
-        max_values=1
+        min_values=1, max_values=1
     )
     async def log_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
         channel = select.values[0]
         self.db.set_log_channel(interaction.guild.id, channel.id)
-        
-        embed = discord.Embed(
-            title="✅ Berhasil",
-            description=f"Log channel diatur ke: {channel.mention}",
-            color=discord.Color.green()
-        )
-        
-        await interaction.response.edit_message(
-            content=None,
-            embed=embed,
-            view=None
-        )
+        await interaction.response.edit_message(content=None, embed=discord.Embed(title="✅ Berhasil", description=f"Log channel diatur ke: {channel.mention}", color=discord.Color.green()), view=None)
+
+class SupportRoleSelect(discord.ui.View):
+    def __init__(self, db: TicketDatabase):
+        super().__init__(timeout=60)
+        self.db = db
+    
+    @discord.ui.select(
+        cls=discord.ui.RoleSelect, 
+        placeholder="Pilih role support...",
+        min_values=1, max_values=1
+    )
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        role = select.values[0]
+        self.db.set_support_role(interaction.guild.id, role.id)
+        await interaction.response.edit_message(content=None, embed=discord.Embed(title="✅ Berhasil", description=f"Support role diatur ke: {role.mention}", color=discord.Color.green()), view=None)
 
 class PanelChannelSelect(discord.ui.View):
     def __init__(self, db: TicketDatabase, bot):
@@ -497,84 +529,35 @@ class PanelChannelSelect(discord.ui.View):
         cls=discord.ui.ChannelSelect, 
         channel_types=[discord.ChannelType.text], 
         placeholder="Pilih channel untuk panel...",
-        min_values=1,
-        max_values=1
+        min_values=1, max_values=1
     )
     async def panel_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
         selected_channel = select.values[0]
-        
-        # Ambil channel yang sebenarnya dari guild
         channel = interaction.guild.get_channel(selected_channel.id)
         
         if not channel:
-            error_embed = discord.Embed(
-                title="❌ Error",
-                description="Channel tidak ditemukan!",
-                color=discord.Color.red()
-            )
-            await interaction.response.edit_message(
-                content=None,
-                embed=error_embed,
-                view=None
-            )
+            await interaction.response.edit_message(content=None, embed=discord.Embed(title="❌ Error", description="Channel tidak ditemukan!", color=discord.Color.red()), view=None)
             return
         
         try:
-            # Buat control panel embed
             panel_embed = discord.Embed(
                 title="🎫 Support Ticket",
                 description="Butuh bantuan? Klik tombol di bawah untuk membuat tiket support.",
                 color=discord.Color.blue()
             )
             panel_embed.set_footer(text="Support System")
-            
             if interaction.guild.icon:
                 panel_embed.set_thumbnail(url=interaction.guild.icon.url)
             
-            # Kirim panel ke channel yang dipilih
-            panel_message = await channel.send(
-                embed=panel_embed, 
-                view=TicketControlPanel(self.bot)
-            )
-            
-            # Simpan ke database
+            panel_message = await channel.send(embed=panel_embed, view=TicketControlPanel(self.bot))
             self.db.set_panel(interaction.guild.id, channel.id, panel_message.id)
             
-            success_embed = discord.Embed(
-                title="✅ Berhasil",
-                description=f"Control panel berhasil dikirim ke {channel.mention}!\n\n[Klik di sini untuk melihat]({panel_message.jump_url})",
-                color=discord.Color.green()
-            )
-            
-            await interaction.response.edit_message(
-                content=None,
-                embed=success_embed,
-                view=None
-            )
+            await interaction.response.edit_message(content=None, embed=discord.Embed(title="✅ Berhasil", description=f"Control panel berhasil dikirim ke {channel.mention}!\n\n[Klik di sini untuk melihat]({panel_message.jump_url})", color=discord.Color.green()), view=None)
             
         except discord.Forbidden:
-            error_embed = discord.Embed(
-                title="❌ Error",
-                description=f"Bot tidak memiliki permission untuk mengirim pesan di {channel.mention}",
-                color=discord.Color.red()
-            )
-            await interaction.response.edit_message(
-                content=None,
-                embed=error_embed,
-                view=None
-            )
+            await interaction.response.edit_message(content=None, embed=discord.Embed(title="❌ Error", description=f"Bot tidak memiliki permission untuk mengirim pesan di {channel.mention}", color=discord.Color.red()), view=None)
         except Exception as e:
-            error_embed = discord.Embed(
-                title="❌ Error",
-                description=f"Terjadi kesalahan:\n```{str(e)}```",
-                color=discord.Color.red()
-            )
-            await interaction.response.edit_message(
-                content=None,
-                embed=error_embed,
-                view=None
-            )
+            await interaction.response.edit_message(content=None, embed=discord.Embed(title="❌ Error", description=f"Terjadi kesalahan:\n```{str(e)}```", color=discord.Color.red()), view=None)
 
 async def setup(bot):
     await bot.add_cog(Ticket(bot))
-# Maintenance update
