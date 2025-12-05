@@ -181,3 +181,17 @@ This project is open-source.
   - **UI Enhancements**:
     - **Salvage**: Added **"Select All"** option with a safety confirmation dialog.
     - **Forge**: Now displays your current material balance (Scrap/Pearl) directly in the menu.
+
+- **Forge System Update & Fixes (Dec 5, 2025)**:
+  - **Standardized Risks**: Forge risks are now consistent across ALL rod types.
+    
+    | Level Range | Risk Type | Consequence |
+    | :--- | :--- | :--- |
+    | **+1 to +3** | **Safe** | No penalty on failure. |
+    | **+4 to +5** | **Downgrade** | Drops 1 level on failure. |
+    | **+6 to +8** | **Reset** | Drops to +0 on failure. |
+    | **+9 to +10** | **Destroy** | Rod is lost on failure. |
+
+  - **Bug Fixes**:
+    - **Forge Cost Display**: Fixed an issue where the coin cost was not shown in the UI.
+    - **Forge Logic**: Fixed a bug where the forge action used an old formula, resulting in incorrect costs (e.g., Dyto Rod using Scrap instead of Pearl). Now fully synchronized with the `forge_data` table.

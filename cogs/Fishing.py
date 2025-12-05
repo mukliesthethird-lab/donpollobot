@@ -145,9 +145,9 @@ class Fishing(commands.Cog):
                 "levels": {
                     1: {"rate": 100, "cost": 500, "scrap": 3, "pearl": 0, "risk": "none"},
                     2: {"rate": 90, "cost": 1000, "scrap": 5, "pearl": 0, "risk": "none"},
-                    3: {"rate": 80, "cost": 2500, "scrap": 8, "pearl": 0, "risk": "downgrade"},
+                    3: {"rate": 80, "cost": 2500, "scrap": 8, "pearl": 0, "risk": "none"},
                     4: {"rate": 70, "cost": 5000, "scrap": 10, "pearl": 0, "risk": "downgrade"},
-                    5: {"rate": 60, "cost": 10000, "scrap": 15, "pearl": 0, "risk": "reset"},
+                    5: {"rate": 60, "cost": 10000, "scrap": 15, "pearl": 0, "risk": "downgrade"},
                     6: {"rate": 50, "cost": 15000, "scrap": 20, "pearl": 0, "risk": "reset"},
                     7: {"rate": 40, "cost": 25000, "scrap": 30, "pearl": 0, "risk": "reset"},
                     8: {"rate": 30, "cost": 40000, "scrap": 0, "pearl": 1, "risk": "reset"},
@@ -159,10 +159,10 @@ class Fishing(commands.Cog):
                 "tier": 3,
                 "levels": {
                     1: {"rate": 100, "cost": 2000, "scrap": 10, "pearl": 0, "risk": "none"},
-                    2: {"rate": 85, "cost": 5000, "scrap": 20, "pearl": 0, "risk": "downgrade"},
-                    3: {"rate": 75, "cost": 10000, "scrap": 30, "pearl": 0, "risk": "downgrade"},
-                    4: {"rate": 65, "cost": 20000, "scrap": 50, "pearl": 0, "risk": "reset"},
-                    5: {"rate": 55, "cost": 40000, "scrap": 75, "pearl": 0, "risk": "reset"},
+                    2: {"rate": 85, "cost": 5000, "scrap": 20, "pearl": 0, "risk": "none"},
+                    3: {"rate": 75, "cost": 10000, "scrap": 30, "pearl": 0, "risk": "none"},
+                    4: {"rate": 65, "cost": 20000, "scrap": 50, "pearl": 0, "risk": "downgrade"},
+                    5: {"rate": 55, "cost": 40000, "scrap": 75, "pearl": 0, "risk": "downgrade"},
                     6: {"rate": 45, "cost": 75000, "scrap": 0, "pearl": 1, "risk": "reset"},
                     7: {"rate": 35, "cost": 120000, "scrap": 0, "pearl": 2, "risk": "reset"},
                     8: {"rate": 25, "cost": 200000, "scrap": 0, "pearl": 3, "risk": "reset"},
@@ -174,10 +174,10 @@ class Fishing(commands.Cog):
                 "tier": 4,
                 "levels": {
                     1: {"rate": 95, "cost": 5000, "scrap": 5, "pearl": 0, "risk": "none"},
-                    2: {"rate": 85, "cost": 10000, "scrap": 10, "pearl": 0, "risk": "downgrade"},
-                    3: {"rate": 75, "cost": 20000, "scrap": 15, "pearl": 0, "risk": "downgrade"},
-                    4: {"rate": 65, "cost": 35000, "scrap": 25, "pearl": 0, "risk": "reset"},
-                    5: {"rate": 55, "cost": 50000, "scrap": 0, "pearl": 1, "risk": "reset"},
+                    2: {"rate": 85, "cost": 10000, "scrap": 10, "pearl": 0, "risk": "none"},
+                    3: {"rate": 75, "cost": 20000, "scrap": 15, "pearl": 0, "risk": "none"},
+                    4: {"rate": 65, "cost": 35000, "scrap": 25, "pearl": 0, "risk": "downgrade"},
+                    5: {"rate": 55, "cost": 50000, "scrap": 0, "pearl": 1, "risk": "downgrade"},
                     6: {"rate": 45, "cost": 75000, "scrap": 0, "pearl": 2, "risk": "reset"},
                     7: {"rate": 35, "cost": 100000, "scrap": 0, "pearl": 3, "risk": "reset"},
                     8: {"rate": 25, "cost": 150000, "scrap": 0, "pearl": 4, "risk": "reset"},
@@ -188,11 +188,11 @@ class Fishing(commands.Cog):
             "Dyto Rod": {
                 "tier": 5,
                 "levels": {
-                    1: {"rate": 90, "cost": 10000, "scrap": 0, "pearl": 1, "risk": "downgrade"},
-                    2: {"rate": 80, "cost": 25000, "scrap": 0, "pearl": 2, "risk": "downgrade"},
-                    3: {"rate": 70, "cost": 50000, "scrap": 0, "pearl": 3, "risk": "reset"},
-                    4: {"rate": 60, "cost": 75000, "scrap": 0, "pearl": 4, "risk": "reset"},
-                    5: {"rate": 50, "cost": 100000, "scrap": 0, "pearl": 5, "risk": "reset"},
+                    1: {"rate": 90, "cost": 10000, "scrap": 0, "pearl": 1, "risk": "none"},
+                    2: {"rate": 80, "cost": 25000, "scrap": 0, "pearl": 2, "risk": "none"},
+                    3: {"rate": 70, "cost": 50000, "scrap": 0, "pearl": 3, "risk": "none"},
+                    4: {"rate": 60, "cost": 75000, "scrap": 0, "pearl": 4, "risk": "downgrade"},
+                    5: {"rate": 50, "cost": 100000, "scrap": 0, "pearl": 5, "risk": "downgrade"},
                     6: {"rate": 40, "cost": 200000, "scrap": 0, "pearl": 7, "risk": "reset"},
                     7: {"rate": 30, "cost": 350000, "scrap": 0, "pearl": 10, "risk": "reset"},
                     8: {"rate": 20, "cost": 500000, "scrap": 0, "pearl": 12, "risk": "reset"},
@@ -783,14 +783,14 @@ class Fishing(commands.Cog):
                 daily_text += entry
                 
         if daily_text:
-            embed.add_field(name="# 📅 Daily Quests", value=daily_text, inline=False)
+            embed.add_field(name="```📅 Daily Quests```", value=daily_text, inline=False)
         else:
-            embed.add_field(name="# 📅 Daily Quests", value="*Tidak ada quest aktif.*", inline=False)
+            embed.add_field(name="```📅 Daily Quests```", value="*Tidak ada quest aktif.*", inline=False)
             
         if weekly_text:
-            embed.add_field(name="# 📅 Weekly Quests", value=weekly_text, inline=False)
+            embed.add_field(name="```📅 Weekly Quests```", value=weekly_text, inline=False)
         else:
-            embed.add_field(name="# 📅 Weekly Quests", value="*Tidak ada quest aktif.*", inline=False)
+            embed.add_field(name="```📅 Weekly Quests```", value="*Tidak ada quest aktif.*", inline=False)
             
         await interaction.response.send_message(embed=embed, view=view)
 
@@ -2342,14 +2342,18 @@ class FishingForgeView(discord.ui.View):
         level = self.cog.get_rod_level(interaction.user.id, self.selected_rod)
         next_level = level + 1
         
-        # Cost Formula
-        cost_scrap = next_level * 5 + 5
-        cost_pearl = 0
-        if next_level >= 5:
-            cost_pearl = (next_level - 4) * 1
+        # Get Forge Data
+        if self.selected_rod not in self.cog.forge_data or next_level not in self.cog.forge_data[self.selected_rod]["levels"]:
+             await interaction.response.send_message("❌ Data forge tidak ditemukan atau level max!", ephemeral=True)
+             return
+             
+        forge_info = self.cog.forge_data[self.selected_rod]["levels"][next_level]
+        cost_coin = forge_info["cost"]
+        cost_scrap = forge_info["scrap"]
+        cost_pearl = forge_info["pearl"]
             
         embed = discord.Embed(title=f"⚒️ Forge: {self.selected_rod} (+{level} ➡️ +{next_level})", color=discord.Color.dark_red())
-        embed.add_field(name="Biaya", value=f"🔩 Scrap Metal: **{cost_scrap}**\n🔮 Magic Pearl: **{cost_pearl}**", inline=False)
+        embed.add_field(name="Biaya", value=f"💰 Coins: **{cost_coin:,}**\n🔩 Scrap Metal: **{cost_scrap}**\n🔮 Magic Pearl: **{cost_pearl}**", inline=False)
         
         # Check User Materials
         user_scrap = self.cog.get_material(interaction.user.id, "Scrap Metal")
@@ -2370,19 +2374,37 @@ class FishingForgeView(discord.ui.View):
         level = self.cog.get_rod_level(interaction.user.id, self.selected_rod)
         next_level = level + 1
         
-        cost_scrap = next_level * 5 + 5
-        cost_pearl = 0
-        if next_level >= 5:
-            cost_pearl = (next_level - 4) * 1
+        # Get Forge Data
+        if self.selected_rod not in self.cog.forge_data or next_level not in self.cog.forge_data[self.selected_rod]["levels"]:
+             await interaction.response.send_message("❌ Data forge tidak ditemukan atau level max!", ephemeral=True)
+             return
+             
+        forge_info = self.cog.forge_data[self.selected_rod]["levels"][next_level]
+        cost_coin = forge_info["cost"]
+        cost_scrap = forge_info["scrap"]
+        cost_pearl = forge_info["pearl"]
             
+        economy = self.cog.get_economy()
+        if not economy:
+            await interaction.response.send_message("❌ Economy Error.", ephemeral=True)
+            return
+            
+        bal = economy.get_balance(interaction.user.id)
         user_scrap = self.cog.get_material(interaction.user.id, "Scrap Metal")
         user_pearl = self.cog.get_material(interaction.user.id, "Magic Pearl")
         
-        if user_scrap < cost_scrap or user_pearl < cost_pearl:
-            await interaction.response.send_message("❌ Material tidak cukup!", ephemeral=True)
+        if bal < cost_coin:
+            await interaction.response.send_message(f"❌ Uang tidak cukup! Butuh {cost_coin:,} coins.", ephemeral=True)
+            return
+        if user_scrap < cost_scrap:
+            await interaction.response.send_message(f"❌ Scrap Metal kurang! Butuh {cost_scrap}x.", ephemeral=True)
+            return
+        if user_pearl < cost_pearl:
+            await interaction.response.send_message(f"❌ Magic Pearl kurang! Butuh {cost_pearl}x.", ephemeral=True)
             return
             
-        # Deduct Materials
+        # Deduct Resources
+        economy.update_balance(interaction.user.id, -cost_coin)
         self.cog.add_material(interaction.user.id, "Scrap Metal", -cost_scrap)
         self.cog.add_material(interaction.user.id, "Magic Pearl", -cost_pearl)
         
