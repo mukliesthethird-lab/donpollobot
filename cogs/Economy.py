@@ -5,6 +5,7 @@ import sqlite3
 import random
 from datetime import datetime, timedelta
 from typing import Optional
+import aiohttp
 
 DB_PATH = 'database.db'
 
@@ -251,32 +252,6 @@ class Economy(commands.Cog):
         )
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="leaderboard", description="Lihat orang terkaya di server")
-    async def leaderboard(self, interaction: discord.Interaction):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT user_id, balance FROM slot_users ORDER BY balance DESC LIMIT 10')
-        top_users = cursor.fetchall()
-        
-        if not top_users:
-            await interaction.response.send_message("Belum ada data ekonomi!", ephemeral=True)
-            return
-
-        embed = discord.Embed(title="🏆 Global Rich List", color=discord.Color.gold())
-        
-        desc = ""
-        for i, (uid, bal) in enumerate(top_users, 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-            try:
-                user = await self.bot.fetch_user(uid)
-                name = user.display_name
-            except:
-                name = "Unknown User"
-            
-            desc += f"{medal} **{name}** - {bal:,} koin\n"
-            
-        embed.description = desc
-        await interaction.response.send_message(embed=embed)
-
     @app_commands.command(name="add_money", description="[OWNER] Tambah koin ke user")
     @app_commands.describe(amount="Jumlah koin", user="User tujuan (opsional, default diri sendiri)")
     async def add_money(self, interaction: discord.Interaction, amount: int, user: Optional[discord.Member] = None):
@@ -383,6 +358,183 @@ class Economy(commands.Cog):
         self.conn.commit()
         
         await interaction.response.send_message(f"✅ Hutang sebesar **{amount:,}** koin telah lunas!", ephemeral=True)
+
+    # =========================================================================
+    # UNIFIED LEADERBOARD (RAW PAYLOAD IMPLEMENTATION)
+    # =========================================================================
+
+    @app_commands.command(name="leaderboard", description="Lihat leaderboard server (Ekonomi & Fishing)")
+    async def leaderboard(self, interaction: discord.Interaction):
+        # Initial payload for leaderboard
+        payload = self.build_leaderboard_payload("initial")
+        await self.send_raw_payload(interaction, payload)
+
+    async def send_raw_payload(self, interaction: discord.Interaction, payload: dict):
+        url = f"https://discord.com/api/v10/interactions/{interaction.id}/{interaction.token}/callback"
+        headers = {"Authorization": f"Bot {self.bot.http.token}", "Content-Type": "application/json"}
+        json_payload = {"type": 4, "data": payload}
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=json_payload, headers=headers) as resp:
+                if resp.status not in [200, 204]:
+                    print(f"❌ Error sending Leaderboard payload: {resp.status} {await resp.text()}")
+
+    async def update_raw_message(self, interaction: discord.Interaction, payload: dict):
+        url = f"https://discord.com/api/v10/webhooks/{self.bot.user.id}/{interaction.token}/messages/@original"
+        headers = {"Authorization": f"Bot {self.bot.http.token}", "Content-Type": "application/json"}
+        
+        # Type 7: Update Message
+        json_payload = {"type": 7, "data": payload}
+        
+        callback_url = f"https://discord.com/api/v10/interactions/{interaction.id}/{interaction.token}/callback"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(callback_url, json=json_payload, headers=headers) as resp:
+                    if resp.status != 200:
+                        print(f"Error updating message: {await resp.text()}")
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        if interaction.type == discord.InteractionType.component:
+            custom_id = interaction.data.get("custom_id")
+            
+            if custom_id == "unified_leaderboard_select":
+                selected = interaction.data["values"][0]
+                payload = self.build_leaderboard_payload(selected)
+                await self.update_raw_message(interaction, payload)
+
+    def build_leaderboard_payload(self, selected_value):
+        # Determine content based on selection
+        content_text = ""
+        
+        if selected_value == "initial":
+            content_text = "## Silakan pilih kategori leaderboard di bawah ini."
+            
+        elif selected_value == "economy_balance":
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT user_id, balance FROM slot_users ORDER BY balance DESC LIMIT 10')
+            top_users = cursor.fetchall()
+            
+            content_text = "## 💰 Global Rich List (Economy)\n\n"
+            if not top_users:
+                content_text += "*Belum ada data.*"
+            else:
+                for i, (uid, bal) in enumerate(top_users, 1):
+                    medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                    user = self.bot.get_user(uid)
+                    name = user.name if user else f"User {uid}"
+                    content_text += f"{medal} **{name}** - {bal:,} koin\n"
+
+        elif selected_value.startswith("fish_"):
+            fishing_cog = self.bot.get_cog("Fishing")
+            if not fishing_cog:
+                content_text = "❌ Fishing cog not loaded!"
+            else:
+                if selected_value == "fish_networth":
+                    data = fishing_cog.get_networth_leaderboard()
+                    content_text = "## 🐟 Fishing Networth Leaderboard\n\n"
+                    if not data:
+                        content_text += "*Belum ada data.*"
+                    else:
+                        for i, row in enumerate(data, start=1):
+                            user_id = row[0]
+                            user = self.bot.get_user(user_id)
+                            username = user.name if user else f"User {user_id}"
+                            total_value = row[1]
+                            content_text += f"**{i}. {username}** - 💰 {total_value:,}\n"
+
+                elif selected_value == "fish_weight":
+                    data = fishing_cog.get_weight_leaderboard()
+                    content_text = "## 🏆 Leaderboard Berat Ikan\n\n"
+                    if not data:
+                        content_text += "*Belum ada data.*"
+                    else:
+                        for i, row in enumerate(data, start=1):
+                            user_id = row[0]
+                            user = self.bot.get_user(user_id)
+                            username = user.name if user else f"User {user_id}"
+                            fish_name, weight, rarity = row[1], row[2], row[3]
+                            content_text += f"**{i}. {username}** - {fish_name} ({weight}kg) `{rarity}`\n"
+
+                elif selected_value == "fish_catch":
+                    data = fishing_cog.get_top_fisher_leaderboard()
+                    content_text = "## 🎣 Top Fisher Leaderboard\n\n"
+                    if not data:
+                        content_text += "*Belum ada data.*"
+                    else:
+                        for i, row in enumerate(data, start=1):
+                            user_id = row[0]
+                            user = self.bot.get_user(user_id)
+                            username = user.name if user else f"User {user_id}"
+                            total_catches = row[1]
+                            content_text += f"**{i}. {username}** - 🎣 {total_catches} catches\n"
+        
+        # Construct the JSON Payload
+        return {
+            "flags": 32768, # Special flag for V2 components
+            "components": [
+                {
+                    "type": 17, # Container
+                    "components": [
+                        {
+                            "type": 10, # Text Display
+                            "content": "# 🏆 SERVER LEADERBOARD"
+                        },
+                        {
+                            "type": 14, # Spacer
+                            "spacing": 1
+                        },
+                        {
+                            "type": 1, # Action Row
+                            "components": [
+                                {
+                                    "type": 3, # Select Menu
+                                    "custom_id": "unified_leaderboard_select",
+                                    "options": [
+                                        {
+                                            "label": "Top Balance (Economy)",
+                                            "value": "economy_balance",
+                                            "description": "Orang terkaya di server.",
+                                            "emoji": {"name": "💰"},
+                                            "default": (selected_value == "economy_balance")
+                                        },
+                                        {
+                                            "label": "Fishing: Networth",
+                                            "value": "fish_networth",
+                                            "description": "Kolektor ikan paling sultan.",
+                                            "emoji": {"name": "🐟"},
+                                            "default": (selected_value == "fish_networth")
+                                        },
+                                        {
+                                            "label": "Fishing: Heaviest",
+                                            "value": "fish_weight",
+                                            "description": "Rekor ikan terberat.",
+                                            "emoji": {"name": "⚖️"},
+                                            "default": (selected_value == "fish_weight")
+                                        },
+                                        {
+                                            "label": "Fishing: Top Fisher",
+                                            "value": "fish_catch",
+                                            "description": "Paling sering mancing.",
+                                            "emoji": {"name": "🎣"},
+                                            "default": (selected_value == "fish_catch")
+                                        }
+                                    ],
+                                    "placeholder": "Pilih Kategori...",
+                                }
+                            ]
+                        },
+                        {
+                            "type": 14, # Spacer
+                            "spacing": 1
+                        },
+                        {
+                            "type": 10, # Text Display (Content)
+                            "content": content_text
+                        }
+                    ]
+                }
+            ]
+        }
 
     def cog_unload(self):
         self.check_loans.cancel()

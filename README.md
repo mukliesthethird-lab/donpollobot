@@ -36,15 +36,25 @@
   - `/fish trade`: Trade fish with other players.
   - `/fishing_rod`: Equip your purchased rods (e.g., **Dyto Rod**).
 - **Competitive**:
-  - `/fish leaderboard`: View global rankings for:
-    - **Top Fisher** (Most catches)
-    - **Heaviest Fish**
-    - **Highest Networth**
+  - `/leaderboard`: **Unified Leaderboard** for both Economy and Fishing!
+    - Toggle between **Top Balance**, **Networth**, **Heaviest Fish**, and **Top Fisher** using a dropdown menu.
   - `/fish catalog`: Browse the complete collection of fish by rarity.
+
+### 🕵️ Who's Lying? (Improved)
+- **Interactive Gameplay**:
+  - **Button Voting**: Vote for the impostor with a single click using dynamic buttons.
+  - **Modal Clues**: Give clues privately and securely using Discord Modals.
+  - **Fast Cleanup**: Optimized channel cleanup for smoother game flow.
+
+### 🎫 Ticket System (Professional)
+- **Advanced Features**:
+  - **Reason Modal**: Users must provide a reason when opening a ticket.
+  - **Support Role**: Configure a specific role (e.g., "Support Staff") to manage tickets via `/ticket-setup`.
+  - **Attachment Prompt**: Clear instructions for users to upload evidence.
 
 ### 💻 Modern UI
 - Utilizes **Discord Components V2** (Containers) for a clean, app-like experience.
-- Interactive buttons and menus for navigation.
+- Interactive buttons, modals, and menus for navigation.
 
 ---
 

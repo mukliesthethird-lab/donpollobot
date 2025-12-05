@@ -508,11 +508,7 @@ class Fishing(commands.Cog):
         await interaction.response.send_message(embed=view.build_embed(), view=view)
         view.original_interaction = interaction
 
-    @fish_group.command(name="leaderboard", description="Show fishing leaderboard (UI V2)")
-    async def leaderboard(self, interaction: discord.Interaction):
-        # Initial payload for leaderboard
-        payload = self.build_leaderboard_payload("initial")
-        await self.send_raw_payload(interaction, payload)
+
 
     @fish_group.command(name="catalog", description="Show fishing catalog (Fish List)")
     async def catalog(self, interaction: discord.Interaction):
@@ -538,108 +534,7 @@ class Fishing(commands.Cog):
         view = FishingForgeView(self, interaction, owned_rods)
         await view.send_initial_message()
 
-    def build_leaderboard_payload(self, selected_value):
-        # Determine content based on selection
-        content_text = ""
-        
-        if selected_value == "initial":
-            content_text = "## Silakan pilih kategori leaderboard di bawah ini."
-        elif selected_value == "weight_lb":
-            data = self.get_weight_leaderboard()
-            content_text = "## 🏆 Leaderboard Berat Ikan\n\n"
-            if not data:
-                content_text += "*Belum ada data.*"
-            else:
-                for i, row in enumerate(data, start=1):
-                    user_id = row[0]
-                    user = self.bot.get_user(user_id)
-                    username = user.name if user else f"User {user_id}"
-                    fish_name, weight, rarity = row[1], row[2], row[3]
-                    content_text += f"**{i}. {username}** - {fish_name} ({weight}kg) `{rarity}`\n"
-                    
-        elif selected_value == "networth_lb":
-            data = self.get_networth_leaderboard()
-            content_text = "## 💰 Leaderboard Networth\n\n"
-            if not data:
-                content_text += "*Belum ada data.*"
-            else:
-                for i, row in enumerate(data, start=1):
-                    user_id = row[0]
-                    user = self.bot.get_user(user_id)
-                    username = user.name if user else f"User {user_id}"
-                    total_value = row[1]
-                    content_text += f"**{i}. {username}** - 💰 {total_value:,}\n"
 
-        elif selected_value == "top_fisher":
-            data = self.get_top_fisher_leaderboard()
-            content_text = "## 🎣 Top Fisher Leaderboard\n\n"
-            if not data:
-                content_text += "*Belum ada data.*"
-            else:
-                for i, row in enumerate(data, start=1):
-                    user_id = row[0]
-                    user = self.bot.get_user(user_id)
-                    username = user.name if user else f"User {user_id}"
-                    total_catches = row[1]
-                    content_text += f"**{i}. {username}** - 🎣 {total_catches} catches\n"
-        
-        # Construct the JSON Payload
-        return {
-            "flags": 32768, # Special flag for V2 components
-            "components": [
-                {
-                    "type": 17, # Container
-                    "components": [
-                        {
-                            "type": 10, # Text Display
-                            "content": "# 🎣 FISHING LEADERBOARD"
-                        },
-                        {
-                            "type": 14, # Spacer
-                            "spacing": 1
-                        },
-                        {
-                            "type": 1, # Action Row
-                            "components": [
-                                {
-                                    "type": 3, # Select Menu
-                                    "custom_id": "fish_leaderboard_select",
-                                    "options": [
-                                        {
-                                            "label": "Leaderboard Berat Ikan",
-                                            "value": "weight_lb",
-                                            "description": "Ikan terberat di dunia.",
-                                            "default": (selected_value == "weight_lb")
-                                        },
-                                        {
-                                            "label": "Leaderboard Networth",
-                                            "value": "networth_lb",
-                                            "description": "Kolektor ikan paling sultan.",
-                                            "default": (selected_value == "networth_lb")
-                                        },
-                                        {
-                                            "label": "Top Fisher",
-                                            "value": "top_fisher",
-                                            "description": "User yang paling sering mancing.",
-                                            "default": (selected_value == "top_fisher")
-                                        }
-                                    ],
-                                    "placeholder": "Pilih Kategori...",
-                                }
-                            ]
-                        },
-                        {
-                            "type": 14, # Spacer
-                            "spacing": 1
-                        },
-                        {
-                            "type": 10, # Text Display (Content)
-                            "content": content_text
-                        }
-                    ]
-                }
-            ]
-        }
 
     def build_catalog_payload(self, rarity):
         fish_list = self.fish_data.get(rarity, [])
@@ -705,11 +600,7 @@ class Fishing(commands.Cog):
         if interaction.type == discord.InteractionType.component:
             custom_id = interaction.data.get("custom_id")
             
-            if custom_id == "fish_leaderboard_select":
-                selected = interaction.data["values"][0]
-                payload = self.build_leaderboard_payload(selected)
-                await self.update_raw_message(interaction, payload)
-            elif custom_id == "fish_catalog_rarity_select":
+            if custom_id == "fish_catalog_rarity_select":
                 selected = interaction.data["values"][0]
                 payload = self.build_catalog_payload(selected)
                 await self.update_raw_message(interaction, payload)
