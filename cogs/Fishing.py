@@ -651,7 +651,7 @@ class Fishing(commands.Cog):
         
         footer_text = ""
         if equipped_rod != "Common Rod" or rod_level > 0:
-            footer_text = f"Rod: {equipped_rod} +{rod_level} | Bonus: +{int((weight_boost-1)*100)}% Weight"
+            footer_text = f"Rod: {equipped_rod} +{rod_level} | Bonus: +{int(round((weight_boost-1)*100))}% Weight"
         
         if footer_text:
             embed.set_footer(text=footer_text)
