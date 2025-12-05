@@ -1880,93 +1880,112 @@ class FishLeaderboardView(discord.ui.View):
         return embed
 
     async def forge_callback(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        rod_name = self.selected_rod
-        level = self.cog.get_rod_level(user_id, rod_name)
-        next_level = level + 1
-        forge_info = self.cog.forge_data[rod_name]["levels"][next_level]
-        
-        cost = forge_info["cost"]
-        scrap = forge_info["scrap"]
-        pearl = forge_info["pearl"]
-        rate = forge_info["rate"]
-        risk = forge_info["risk"]
-        
-        # Apply Lucky Charm Boost
-        if self.use_lucky_charm:
-            rate += 50
-            if rate > 100: rate = 100
-        
-        # Check Resources
-        economy = self.cog.get_economy()
-        if not economy:
-            await interaction.response.send_message("❌ Economy Error.", ephemeral=True)
-            return
+        try:
+            user_id = interaction.user.id
+            rod_name = self.selected_rod
             
-        bal = economy.get_balance(user_id)
-        user_scrap = self.cog.get_material(user_id, "Scrap Metal")
-        user_pearl = self.cog.get_material(user_id, "Magic Pearl")
-        user_charm = self.cog.get_material(user_id, "Lucky Charm")
-        
-        if bal < cost:
-            await interaction.response.send_message(f"❌ Uang tidak cukup! Butuh {cost:,} coins.", ephemeral=True)
-            return
-        if user_scrap < scrap:
-            await interaction.response.send_message(f"❌ Scrap Metal kurang! Butuh {scrap}x.", ephemeral=True)
-            return
-        if user_pearl < pearl:
-            await interaction.response.send_message(f"❌ Magic Pearl kurang! Butuh {pearl}x.", ephemeral=True)
-            return
-        if self.use_lucky_charm and user_charm < 1:
-             await interaction.response.send_message("❌ Lucky Charm kurang!", ephemeral=True)
-             return
+            if not rod_name:
+                await interaction.response.send_message("❌ Pilih rod terlebih dahulu!", ephemeral=True)
+                return
+
+            level = self.cog.get_rod_level(user_id, rod_name)
+            next_level = level + 1
             
-        # Deduct Resources
-        economy.update_balance(user_id, -cost)
-        self.cog.add_material(user_id, "Scrap Metal", -scrap)
-        self.cog.add_material(user_id, "Magic Pearl", -pearl)
-        if self.use_lucky_charm:
-            self.cog.add_material(user_id, "Lucky Charm", -1)
-        
-        # Roll RNG
-        roll = random.randint(1, 100)
-        success = roll <= rate
-        
-        print(f"[DEBUG] Forge: User={interaction.user.name}, Rod={rod_name}, Level={level}->{next_level}, Rate={rate}, Roll={roll}, Success={success}")
-        
-        if success:
-            self.cog.update_rod_level(user_id, rod_name, next_level)
-            self.last_result = f"🔥 **SUKSES!** {rod_name} naik ke level **+{next_level}**!"
-            self.last_status = "success"
-        else:
-            # Failure Logic
-            result_text = "Gagal! Level tetap."
-            if risk == "downgrade":
-                new_level = max(0, level - 1)
-                self.cog.update_rod_level(user_id, rod_name, new_level)
-                result_text = f"Gagal! Level turun menjadi **+{new_level}**."
-            elif risk == "reset":
-                self.cog.update_rod_level(user_id, rod_name, 0)
-                result_text = "Gagal! Level **RESET** ke +0."
-            elif risk == "destroy":
-                cursor = self.cog.conn.cursor()
-                cursor.execute('DELETE FROM fishing_rods WHERE user_id = ? AND rod_name = ?', (user_id, rod_name))
+            # Validate Forge Data
+            if rod_name not in self.cog.forge_data or next_level not in self.cog.forge_data[rod_name]["levels"]:
+                 await interaction.response.send_message("❌ Data forge tidak ditemukan atau level sudah maksimal!", ephemeral=True)
+                 return
+                 
+            forge_info = self.cog.forge_data[rod_name]["levels"][next_level]
+            
+            cost = forge_info["cost"]
+            scrap = forge_info["scrap"]
+            pearl = forge_info["pearl"]
+            rate = forge_info["rate"]
+            risk = forge_info["risk"]
+            
+            # Apply Lucky Charm Boost
+            if self.use_lucky_charm:
+                rate += 50
+                if rate > 100: rate = 100
+            
+            # Check Resources
+            economy = self.cog.get_economy()
+            if not economy:
+                await interaction.response.send_message("❌ Economy Error.", ephemeral=True)
+                return
                 
-                # Check if equipped, if so, equip Common Rod
-                equipped = self.cog.get_equipped_rod(user_id)
-                if equipped == rod_name:
-                    cursor.execute('UPDATE fishing_profile SET equipped_rod = ? WHERE user_id = ?', ("Common Rod", user_id))
+            bal = economy.get_balance(user_id)
+            user_scrap = self.cog.get_material(user_id, "Scrap Metal")
+            user_pearl = self.cog.get_material(user_id, "Magic Pearl")
+            user_charm = self.cog.get_material(user_id, "Lucky Charm")
+            
+            if bal < cost:
+                await interaction.response.send_message(f"❌ Uang tidak cukup! Butuh {cost:,} coins.", ephemeral=True)
+                return
+            if user_scrap < scrap:
+                await interaction.response.send_message(f"❌ Scrap Metal kurang! Butuh {scrap}x.", ephemeral=True)
+                return
+            if user_pearl < pearl:
+                await interaction.response.send_message(f"❌ Magic Pearl kurang! Butuh {pearl}x.", ephemeral=True)
+                return
+            if self.use_lucky_charm and user_charm < 1:
+                 await interaction.response.send_message("❌ Lucky Charm kurang!", ephemeral=True)
+                 return
+                
+            # Deduct Resources
+            economy.update_balance(user_id, -cost)
+            self.cog.add_material(user_id, "Scrap Metal", -scrap)
+            self.cog.add_material(user_id, "Magic Pearl", -pearl)
+            if self.use_lucky_charm:
+                self.cog.add_material(user_id, "Lucky Charm", -1)
+            
+            # Roll RNG
+            roll = random.randint(1, 100)
+            success = roll <= rate
+            
+            print(f"[DEBUG] Forge: User={interaction.user.name}, Rod={rod_name}, Level={level}->{next_level}, Rate={rate}, Roll={roll}, Success={success}")
+            
+            if success:
+                self.cog.update_rod_level(user_id, rod_name, next_level)
+                self.last_result = f"🔥 **SUKSES!** {rod_name} naik ke level **+{next_level}**!"
+                self.last_status = "success"
+            else:
+                # Failure Logic
+                result_text = "Gagal! Level tetap."
+                if risk == "downgrade":
+                    new_level = max(0, level - 1)
+                    self.cog.update_rod_level(user_id, rod_name, new_level)
+                    result_text = f"Gagal! Level turun menjadi **+{new_level}**."
+                elif risk == "reset":
+                    self.cog.update_rod_level(user_id, rod_name, 0)
+                    result_text = "Gagal! Level **RESET** ke +0."
+                elif risk == "destroy":
+                    cursor = self.cog.conn.cursor()
+                    cursor.execute('DELETE FROM fishing_rods WHERE user_id = ? AND rod_name = ?', (user_id, rod_name))
                     
-                self.cog.conn.commit()
-                result_text = "💥 **GAGAL TOTAL!** Rod **HANCUR** berkeping-keping! 💀"
-                self.selected_rod = None # Reset selection
+                    # Check if equipped, if so, equip Common Rod
+                    equipped = self.cog.get_equipped_rod(user_id)
+                    if equipped == rod_name:
+                        cursor.execute('UPDATE fishing_profile SET equipped_rod = ? WHERE user_id = ?', ("Common Rod", user_id))
+                        
+                    self.cog.conn.commit()
+                    result_text = "💥 **GAGAL TOTAL!** Rod **HANCUR** berkeping-keping! 💀"
+                    self.selected_rod = None # Reset selection
+                    
+                self.last_result = f"💀 **GAGAL!** {result_text}"
+                self.last_status = "failure"
                 
-            self.last_result = f"💀 **GAGAL!** {result_text}"
-            self.last_status = "failure"
+            # Refresh View
+            self.update_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
             
-        # Refresh View
-        self.update_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        except Exception as e:
+            print(f"[ERROR] Forge Callback: {e}")
+            try:
+                await interaction.response.send_message(f"❌ Terjadi kesalahan: {e}", ephemeral=True)
+            except:
+                pass
 
 
 
