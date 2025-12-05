@@ -890,7 +890,7 @@ class Fishing(commands.Cog):
             
         # Materials
         if material_msg:
-             embed.add_field(name="`📦 Extra Loot`", value=f">> - {material_msg.strip()}", inline=True)
+             embed.add_field(name="`📦 Extra Loot`", value=f"{material_msg.strip()}", inline=True)
         
         # Footer Stats
         weight_bonus_pct = int((weight_boost - 1.0) * 100)
