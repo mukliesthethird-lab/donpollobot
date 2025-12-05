@@ -1,0 +1,392 @@
+import discord
+from discord import app_commands
+from discord.ext import commands, tasks
+import sqlite3
+import random
+from datetime import datetime, timedelta
+from typing import Optional
+
+DB_PATH = 'database.db'
+
+class Economy(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.conn = sqlite3.connect(DB_PATH)
+        self._init_db()
+
+    def _init_db(self):
+        """Initialize the economy table (using existing slot_users table)"""
+        cursor = self.conn.cursor()
+        # We use the existing slot_users table as the main economy table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS slot_users (
+                user_id INTEGER PRIMARY KEY,
+                balance INTEGER DEFAULT 500,
+                total_wins INTEGER DEFAULT 0,
+                total_losses INTEGER DEFAULT 0,
+                last_daily TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        # Add last_work column if it doesn't exist
+        try:
+            cursor.execute('ALTER TABLE slot_users ADD COLUMN last_work TEXT')
+        except sqlite3.OperationalError:
+            pass # Column likely already exists
+            
+        # Create loans table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS loans (
+                user_id INTEGER PRIMARY KEY,
+                amount INTEGER,
+                due_date TEXT
+            )
+        ''')
+            
+        self.conn.commit()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print('✅ Economy Cog is ready')
+        self.check_loans.start()
+
+    @tasks.loop(minutes=1)
+    async def check_loans(self):
+        """Background task to check for due loans"""
+        cursor = self.conn.cursor()
+        now = datetime.now()
+        
+        # Get due loans
+        cursor.execute('SELECT user_id, amount, due_date FROM loans')
+        loans = cursor.fetchall()
+        
+        for uid, amount, due_date_str in loans:
+            try:
+                due_date = datetime.fromisoformat(due_date_str)
+                if now >= due_date:
+                    # Loan is due! Deduct balance
+                    self.update_balance(uid, -amount)
+                    
+                    # Remove from loans table
+                    cursor.execute('DELETE FROM loans WHERE user_id = ?', (uid,))
+                    self.conn.commit()
+                    
+                    print(f"[LOAN] Auto-deducted {amount} from {uid}")
+            except Exception as e:
+                print(f"[LOAN ERROR] {e}")
+
+    def get_user_data(self, user_id: int):
+        """Get user data from database"""
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT balance, total_wins, total_losses, last_daily, last_work FROM slot_users WHERE user_id = ?', (user_id,))
+        result = cursor.fetchone()
+        
+        if not result:
+            # Create new user with starting balance
+            cursor.execute('''
+                INSERT INTO slot_users (user_id, balance, total_wins, total_losses)
+                VALUES (?, 500, 0, 0)
+            ''', (user_id,))
+            self.conn.commit()
+            return 500, 0, 0, None, None
+        
+        return result
+
+    def get_balance(self, user_id: int) -> int:
+        """Get user balance"""
+        balance, _, _, _, _ = self.get_user_data(user_id)
+        return balance
+
+    def update_balance(self, user_id: int, amount: int) -> int:
+        """Update user balance. Returns new balance."""
+        cursor = self.conn.cursor()
+        
+        # Ensure user exists
+        self.get_user_data(user_id)
+        
+        cursor.execute('UPDATE slot_users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
+        self.conn.commit()
+        
+        return self.get_balance(user_id)
+
+    def transfer_money(self, sender_id: int, receiver_id: int, amount: int) -> bool:
+        """Transfer money between users. Returns True if successful."""
+        if amount <= 0:
+            return False
+            
+        sender_bal = self.get_balance(sender_id)
+        if sender_bal < amount:
+            return False
+            
+        # Ensure receiver exists
+        self.get_user_data(receiver_id)
+        
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute('UPDATE slot_users SET balance = balance - ? WHERE user_id = ?', (amount, sender_id))
+            cursor.execute('UPDATE slot_users SET balance = balance + ? WHERE user_id = ?', (amount, receiver_id))
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            return False
+
+    @app_commands.command(name="balance", description="Cek saldo koin Anda")
+    async def balance(self, interaction: discord.Interaction, user: Optional[discord.Member] = None):
+        target = user or interaction.user
+        if target.bot:
+            await interaction.response.send_message("❌ Bot tidak memiliki saldo!", ephemeral=True)
+            return
+
+        balance = self.get_balance(target.id)
+        
+        embed = discord.Embed(
+            title=f"💰 Saldo {target.display_name}",
+            description=f"**{balance:,}** koin",
+            color=discord.Color.green()
+        )
+        embed.set_thumbnail(url=target.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="pay", description="Transfer koin ke user lain")
+    @app_commands.describe(user="User tujuan", amount="Jumlah koin")
+    async def pay(self, interaction: discord.Interaction, user: discord.Member, amount: int):
+        if user.id == interaction.user.id:
+            await interaction.response.send_message("❌ Anda tidak bisa transfer ke diri sendiri!", ephemeral=True)
+            return
+            
+        if user.bot:
+            await interaction.response.send_message("❌ Anda tidak bisa transfer ke bot!", ephemeral=True)
+            return
+
+        if amount <= 0:
+            await interaction.response.send_message("❌ Jumlah harus lebih dari 0!", ephemeral=True)
+            return
+
+        if self.transfer_money(interaction.user.id, user.id, amount):
+            embed = discord.Embed(
+                title="💸 Transfer Berhasil",
+                description=f"Anda berhasil mentransfer **{amount:,}** koin ke {user.mention}",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("❌ Saldo tidak cukup!", ephemeral=True)
+
+    @app_commands.command(name="daily", description="Klaim bonus harian (setiap 24 jam)")
+    async def daily(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        _, _, _, last_daily, _ = self.get_user_data(user_id)
+        
+        now = datetime.now()
+        
+        if last_daily:
+            try:
+                last_claim = datetime.fromisoformat(last_daily)
+                if now - last_claim < timedelta(days=1):
+                    next_claim = last_claim + timedelta(days=1)
+                    time_left = next_claim - now
+                    hours = int(time_left.total_seconds() // 3600)
+                    minutes = int((time_left.total_seconds() % 3600) // 60)
+                    
+                    await interaction.response.send_message(
+                        f"⏰ Tunggu **{hours} jam {minutes} menit** lagi untuk klaim daily!", 
+                        ephemeral=True
+                    )
+                    return
+            except ValueError:
+                pass # Invalid date format, allow claim
+
+        reward = 200
+        self.update_balance(user_id, reward)
+        
+        cursor = self.conn.cursor()
+        cursor.execute('UPDATE slot_users SET last_daily = ? WHERE user_id = ?', (now.isoformat(), user_id))
+        self.conn.commit()
+        
+        embed = discord.Embed(
+            title="🌞 Daily Reward",
+            description=f"Kamu mendapatkan **{reward}** koin!\nSaldo sekarang: **{self.get_balance(user_id):,}** koin",
+            color=discord.Color.gold()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="work", description="Bekerja untuk mendapatkan koin (setiap 1 jam)")
+    async def work(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        _, _, _, _, last_work = self.get_user_data(user_id)
+        
+        now = datetime.now()
+        
+        if last_work:
+            try:
+                last_work_time = datetime.fromisoformat(last_work)
+                if now - last_work_time < timedelta(hours=1):
+                    next_work = last_work_time + timedelta(hours=1)
+                    time_left = next_work - now
+                    minutes = int(time_left.total_seconds() // 60)
+                    
+                    await interaction.response.send_message(
+                        f"⏰ Kamu sedang lelah! Tunggu **{minutes} menit** lagi.", 
+                        ephemeral=True
+                    )
+                    return
+            except ValueError:
+                pass
+
+        earnings = random.randint(50, 350)
+        self.update_balance(user_id, earnings)
+        
+        cursor = self.conn.cursor()
+        cursor.execute('UPDATE slot_users SET last_work = ? WHERE user_id = ?', (now.isoformat(), user_id))
+        self.conn.commit()
+        
+        jobs = ["Barista", "Programmer", "Gamer", "Chef", "Driver", "Artist", "Editor", "Slave", "Mechanic"]
+        job = random.choice(jobs)
+        
+        embed = discord.Embed(
+            title="💼 Kerja Keras",
+            description=f"Kamu bekerja sebagai **{job}** dan mendapat **{earnings}** koin!\nSaldo sekarang: **{self.get_balance(user_id):,}** koin",
+            color=discord.Color.blue()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="leaderboard", description="Lihat orang terkaya di server")
+    async def leaderboard(self, interaction: discord.Interaction):
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT user_id, balance FROM slot_users ORDER BY balance DESC LIMIT 10')
+        top_users = cursor.fetchall()
+        
+        if not top_users:
+            await interaction.response.send_message("Belum ada data ekonomi!", ephemeral=True)
+            return
+
+        embed = discord.Embed(title="🏆 Global Rich List", color=discord.Color.gold())
+        
+        desc = ""
+        for i, (uid, bal) in enumerate(top_users, 1):
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+            try:
+                user = await self.bot.fetch_user(uid)
+                name = user.display_name
+            except:
+                name = "Unknown User"
+            
+            desc += f"{medal} **{name}** - {bal:,} koin\n"
+            
+        embed.description = desc
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="add_money", description="[OWNER] Tambah koin ke user")
+    @app_commands.describe(amount="Jumlah koin", user="User tujuan (opsional, default diri sendiri)")
+    async def add_money(self, interaction: discord.Interaction, amount: int, user: Optional[discord.Member] = None):
+        # Restricted to specific user ID
+        if interaction.user.id != 719511161757761656:
+            await interaction.response.send_message("❌ Kamu tidak memiliki akses ke command ini!", ephemeral=True)
+            return
+
+        target = user or interaction.user
+        new_balance = self.update_balance(target.id, amount)
+        
+        embed = discord.Embed(
+            title="💰 Add Money",
+            description=f"Berhasil menambahkan **{amount:,}** koin ke {target.mention}.\nSaldo sekarang: **{new_balance:,}**",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="remove_money", description="[OWNER] Kurangi koin user")
+    @app_commands.describe(amount="Jumlah koin", user="User tujuan")
+    async def remove_money(self, interaction: discord.Interaction, amount: int, user: discord.Member):
+        # Restricted to specific user ID
+        if interaction.user.id != 719511161757761656:
+            await interaction.response.send_message("❌ Kamu tidak memiliki akses ke command ini!", ephemeral=True)
+            return
+
+        if amount <= 0:
+            await interaction.response.send_message("❌ Jumlah harus lebih dari 0!", ephemeral=True)
+            return
+
+        new_balance = self.update_balance(user.id, -amount)
+        
+        embed = discord.Embed(
+            title="💸 Remove Money",
+            description=f"Berhasil mengurangi **{amount:,}** koin dari {user.mention}.\nSaldo sekarang: **{new_balance:,}**",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="ngutang", description="Pinjam koin (Jatuh tempo 24 jam)")
+    @app_commands.describe(amount="Jumlah pinjaman (Max 15000)")
+    async def ngutang(self, interaction: discord.Interaction, amount: int):
+        user_id = interaction.user.id
+        
+        if amount <= 0 or amount > 15000:
+            await interaction.response.send_message("❌ Jumlah pinjaman harus 1 - 15000 koin!", ephemeral=True)
+            return
+
+        cursor = self.conn.cursor()
+        
+        # Check if already has loan (Fast check)
+        cursor.execute('SELECT amount FROM loans WHERE user_id = ?', (user_id,))
+        if cursor.fetchone():
+            await interaction.response.send_message("❌ **Bayar dulu hutang sebelumnya!**\nLunasi hutang lama baru bisa pinjam lagi.", ephemeral=True)
+            return
+
+        due_date = datetime.now() + timedelta(days=1)
+        
+        try:
+            # Try to insert loan first (Atomic check via Primary Key)
+            cursor.execute('INSERT INTO loans (user_id, amount, due_date) VALUES (?, ?, ?)', 
+                           (user_id, amount, due_date.isoformat()))
+            self.conn.commit()
+            
+            # If successful, give money
+            self.update_balance(user_id, amount)
+            
+            embed = discord.Embed(
+                title="💸 Pinjaman Berhasil",
+                description=f"Anda meminjam **{amount:,}** koin.\n\n⚠️ **Jatuh Tempo:** <t:{int(due_date.timestamp())}:R>\nJika telat, saldo akan otomatis terpotong (bisa minus).",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed)
+            
+        except sqlite3.IntegrityError:
+            # Race condition caught: User already has a loan
+            await interaction.response.send_message("❌ **Bayar dulu hutang sebelumnya!**", ephemeral=True)
+        except Exception as e:
+            print(f"Error in ngutang: {e}")
+            await interaction.response.send_message("❌ Terjadi kesalahan saat memproses pinjaman.", ephemeral=True)
+
+    @app_commands.command(name="pay_loan", description="Bayar hutang lebih awal")
+    async def pay_loan(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        cursor = self.conn.cursor()
+        
+        cursor.execute('SELECT amount FROM loans WHERE user_id = ?', (user_id,))
+        result = cursor.fetchone()
+        
+        if not result:
+            await interaction.response.send_message("✅ Anda tidak memiliki hutang!", ephemeral=True)
+            return
+            
+        amount = result[0]
+        balance = self.get_balance(user_id)
+        
+        if balance < amount:
+            await interaction.response.send_message(f"❌ Saldo tidak cukup untuk bayar hutang! (Butuh: {amount}, Ada: {balance})", ephemeral=True)
+            return
+            
+        # Pay loan
+        self.update_balance(user_id, -amount)
+        cursor.execute('DELETE FROM loans WHERE user_id = ?', (user_id,))
+        self.conn.commit()
+        
+        await interaction.response.send_message(f"✅ Hutang sebesar **{amount:,}** koin telah lunas!", ephemeral=True)
+
+    def cog_unload(self):
+        self.check_loans.cancel()
+        self.conn.close()
+
+async def setup(bot):
+    await bot.add_cog(Economy(bot))
