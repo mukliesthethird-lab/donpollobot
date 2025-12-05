@@ -1029,7 +1029,7 @@ class FishingInventoryView(discord.ui.View):
 
     async def send_initial_message(self):
         embed = self.build_embed()
-        await self.original_interaction.followup.send(embed=embed, view=self)
+        await self.original_interaction.edit_original_response(embed=embed, view=self)
 
     def build_embed(self):
         total_value = sum(row[4] for row in self.all_rows)
@@ -1166,6 +1166,7 @@ class ConfirmSellAllView(discord.ui.View):
         
     @discord.ui.button(label="✅ YA, JUAL", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         # Update Economy
         economy = self.inventory_view.cog.get_economy()
         if economy:
@@ -1193,10 +1194,13 @@ class ConfirmSellAllView(discord.ui.View):
         
         self.inventory_view.update_components()
         
-        await self.inventory_view.original_interaction.edit_original_response(embed=self.inventory_view.build_embed(), view=self.inventory_view)
+        try:
+            await self.inventory_view.original_interaction.edit_original_response(embed=self.inventory_view.build_embed(), view=self.inventory_view)
+        except:
+            pass
         
         rarity_text = f" ({self.rarity})" if self.rarity else " SEMUA"
-        await interaction.response.edit_message(content=f"✅ Berhasil menjual **{self.count}** ikan{rarity_text} seharga **{self.total_price:,}** koin!", view=None)
+        await interaction.edit_original_response(content=f"✅ Berhasil menjual **{self.count}** ikan{rarity_text} seharga **{self.total_price:,}** koin!", view=None)
 
     @discord.ui.button(label="❌ Batal", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2067,6 +2071,7 @@ class ConfirmSalvageView(discord.ui.View):
         
     @discord.ui.button(label="✅ YA, SALVAGE", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         cursor = self.salvage_view.cog.conn.cursor()
         
         # Execute Deletion
@@ -2098,7 +2103,7 @@ class ConfirmSalvageView(discord.ui.View):
         rarity_text = f" ({self.rarity})" if self.rarity else ""
         if not self.rarity and not self.selected_ids: rarity_text = " SEMUA"
         
-        await interaction.response.edit_message(content=f"✅ Berhasil men-salvage **{self.count}** ikan{rarity_text} menjadi **{self.total_scrap}x Scrap Metal** 🔩!", view=None)
+        await interaction.edit_original_response(content=f"✅ Berhasil men-salvage **{self.count}** ikan{rarity_text} menjadi **{self.total_scrap}x Scrap Metal** 🔩!", view=None)
 
     @discord.ui.button(label="❌ Batal", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
