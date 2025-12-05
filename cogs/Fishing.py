@@ -967,13 +967,8 @@ class FishingInventoryView(discord.ui.View):
         # 1. Select Menu for Selling
         options = []
         
-        # Add Sell All Option
-        options.append(discord.SelectOption(
-            label="💰 Jual SEMUA Ikan (Sell All)",
-            description="Menjual semua ikan di inventory ini.",
-            value="sell_all",
-            emoji="⚠️"
-        ))
+        # Removed Sell All from individual select to avoid clutter
+
         
         for i, (fid, name, rarity, weight, price) in enumerate(current_rows, start=1):
             # Visual ID is just the index in the list (1-25)
@@ -994,12 +989,32 @@ class FishingInventoryView(discord.ui.View):
         select.callback = self.select_callback
         self.add_item(select)
         
-        # 2. Navigation Buttons
-        prev_btn = discord.ui.Button(label="◀️ Prev", style=discord.ButtonStyle.secondary, disabled=(self.page == 0))
+        # 2. Bulk Action Select Menu
+        bulk_options = [
+            discord.SelectOption(label="💰 Jual SEMUA (Sell All)", value="sell_all", description="Jual semua ikan di inventory.", emoji="⚠️"),
+            discord.SelectOption(label="⚪ Jual Common", value="sell_Common", description="Jual semua ikan Common.", emoji="🐟"),
+            discord.SelectOption(label="🟢 Jual Uncommon", value="sell_Uncommon", description="Jual semua ikan Uncommon.", emoji="🐟"),
+            discord.SelectOption(label="🔵 Jual Rare", value="sell_Rare", description="Jual semua ikan Rare.", emoji="🐟"),
+            discord.SelectOption(label="🟣 Jual Epic", value="sell_Epic", description="Jual semua ikan Epic.", emoji="🐟"),
+            discord.SelectOption(label="🟡 Jual Legendary", value="sell_Legendary", description="Jual semua ikan Legendary.", emoji="🐟"),
+        ]
+        
+        bulk_select = discord.ui.Select(
+            placeholder="Opsi Jual Massal (Bulk Actions)...",
+            min_values=1,
+            max_values=1,
+            options=bulk_options,
+            row=1
+        )
+        bulk_select.callback = self.bulk_action_callback
+        self.add_item(bulk_select)
+
+        # 3. Navigation Buttons
+        prev_btn = discord.ui.Button(label="◀️ Prev", style=discord.ButtonStyle.secondary, disabled=(self.page == 0), row=2)
         prev_btn.callback = self.prev_callback
         self.add_item(prev_btn)
         
-        next_btn = discord.ui.Button(label="Next ▶️", style=discord.ButtonStyle.secondary, disabled=(self.page >= self.max_pages - 1))
+        next_btn = discord.ui.Button(label="Next ▶️", style=discord.ButtonStyle.secondary, disabled=(self.page >= self.max_pages - 1), row=2)
         next_btn.callback = self.next_callback
         self.add_item(next_btn)
 
@@ -1051,7 +1066,7 @@ class FishingInventoryView(discord.ui.View):
             
         selected_ids = interaction.data["values"]
         
-        # Check for Sell All
+        # Check for Sell All (Legacy check, kept for safety but removed from options)
         if "sell_all" in selected_ids:
             await self.sell_all_callback(interaction)
             return
@@ -1087,6 +1102,35 @@ class FishingInventoryView(discord.ui.View):
         self.update_components()
         await interaction.message.edit(embed=self.build_embed(), view=self)
 
+    async def bulk_action_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.original_interaction.user.id:
+            await interaction.response.send_message("❌ Ini bukan inventory kamu!", ephemeral=True)
+            return
+            
+        action = interaction.data["values"][0]
+        
+        if action == "sell_all":
+            await self.sell_all_callback(interaction)
+            return
+            
+        if action.startswith("sell_"):
+            rarity = action.split("_")[1]
+            
+            # Calculate total for this rarity
+            total_price = 0
+            count = 0
+            for row in self.all_rows:
+                if row[2] == rarity:
+                    total_price += row[4]
+                    count += 1
+            
+            if count == 0:
+                await interaction.response.send_message(f"❌ Tidak ada ikan **{rarity}** di inventory!", ephemeral=True)
+                return
+                
+            confirm_view = ConfirmSellAllView(self, total_price, count, rarity)
+            await interaction.response.send_message(f"⚠️ Yakin ingin menjual **SEMUA {rarity}** ({count} ikan) seharga **{total_price:,}** koin?", view=confirm_view, ephemeral=True)
+
     async def sell_all_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.original_interaction.user.id:
             await interaction.response.send_message("❌ Ini bukan inventory kamu!", ephemeral=True)
@@ -1104,32 +1148,46 @@ class FishingInventoryView(discord.ui.View):
         await interaction.response.send_message(f"⚠️ Yakin ingin menjual **SEMUA** ({count} ikan) seharga **{total_price:,}** koin?", view=confirm_view, ephemeral=True)
 
 class ConfirmSellAllView(discord.ui.View):
-    def __init__(self, inventory_view, total_price, count):
+    def __init__(self, inventory_view, total_price, count, rarity=None):
         super().__init__(timeout=60)
         self.inventory_view = inventory_view
         self.total_price = total_price
         self.count = count
+        self.rarity = rarity
         
-    @discord.ui.button(label="✅ YA, JUAL SEMUA", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="✅ YA, JUAL", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Update Economy
         economy = self.inventory_view.cog.get_economy()
         if economy:
             economy.update_balance(interaction.user.id, self.total_price)
             
-        # Delete All Fish
+        # Delete Fish
         cursor = self.inventory_view.cog.conn.cursor()
-        cursor.execute('DELETE FROM fish_inventory WHERE user_id = ?', (interaction.user.id,))
+        if self.rarity:
+            cursor.execute('DELETE FROM fish_inventory WHERE user_id = ? AND rarity = ?', (interaction.user.id, self.rarity))
+        else:
+            cursor.execute('DELETE FROM fish_inventory WHERE user_id = ?', (interaction.user.id,))
+            
         self.inventory_view.cog.conn.commit()
         
         # Update Inventory View
-        self.inventory_view.all_rows = []
+        self.inventory_view.all_rows = [] # Force refresh logic below will handle re-fetching if needed, but for now we clear
+        
+        # Re-fetch to see what's left (if we only sold one rarity)
+        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (interaction.user.id,))
+        self.inventory_view.all_rows = cursor.fetchall()
+        
         self.inventory_view.page = 0
-        self.inventory_view.max_pages = 1
+        self.inventory_view.max_pages = (len(self.inventory_view.all_rows) - 1) // self.inventory_view.items_per_page + 1
+        if self.inventory_view.max_pages < 1: self.inventory_view.max_pages = 1
+        
         self.inventory_view.update_components()
         
         await self.inventory_view.original_interaction.edit_original_response(embed=self.inventory_view.build_embed(), view=self.inventory_view)
-        await interaction.response.edit_message(content=f"✅ Berhasil menjual **{self.count}** ikan seharga **{self.total_price:,}** koin!", view=None)
+        
+        rarity_text = f" ({self.rarity})" if self.rarity else " SEMUA"
+        await interaction.response.edit_message(content=f"✅ Berhasil menjual **{self.count}** ikan{rarity_text} seharga **{self.total_price:,}** koin!", view=None)
 
     @discord.ui.button(label="❌ Batal", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1679,206 +1737,6 @@ class FishLeaderboardView(discord.ui.View):
 
     async def callback(self, interaction: discord.Interaction):
         self.mode = interaction.data["values"][0]
-        self.update_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-
-
-class FishingSalvageView(discord.ui.View):
-    def __init__(self, cog, interaction, all_rows):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.original_interaction = interaction
-        self.all_rows = all_rows
-        self.page = 0
-        self.items_per_page = 25
-        self.max_pages = (len(all_rows) - 1) // self.items_per_page + 1
-        
-        self.update_components()
-
-    def update_components(self):
-        self.clear_items()
-        
-        start = self.page * self.items_per_page
-        end = start + self.items_per_page
-        current_rows = self.all_rows[start:end]
-        
-        options = []
-        
-        # Add Salvage All Option
-        options.append(discord.SelectOption(
-            label="♻️ Salvage SEMUA Ikan (Dapat Scrap Metal)",
-            description="Hancurkan semua ikan jadi material.",
-            value="salvage_all",
-            emoji="🔥"
-        ))
-        
-        for i, (fid, name, rarity, weight, price) in enumerate(current_rows, start=1):
-            visual_id = i 
-            # Calculate scrap amount based on rarity
-            scrap_amount = 1
-            if rarity == "Uncommon": scrap_amount = 2
-            elif rarity == "Rare": scrap_amount = 5
-            elif rarity == "Epic": scrap_amount = 10
-            elif rarity == "Legendary": scrap_amount = 20
-            
-            options.append(discord.SelectOption(
-                label=f"{visual_id}. {name} ({rarity}) -> {scrap_amount} Scrap",
-                description=f"Weight: {weight}kg",
-                value=str(fid),
-                emoji="🔩"
-            ))
-            
-        select = discord.ui.Select(
-            placeholder=f"Pilih ikan untuk di-salvage (Halaman {self.page + 1}/{self.max_pages})...",
-            min_values=1,
-            max_values=len(options),
-            options=options
-        )
-        select.callback = self.select_callback
-        self.add_item(select)
-        
-        # Navigation Buttons
-        prev_btn = discord.ui.Button(label="◀️ Prev", style=discord.ButtonStyle.secondary, disabled=(self.page == 0))
-        prev_btn.callback = self.prev_callback
-        self.add_item(prev_btn)
-        
-        next_btn = discord.ui.Button(label="Next ▶️", style=discord.ButtonStyle.secondary, disabled=(self.page >= self.max_pages - 1))
-        next_btn.callback = self.next_callback
-        self.add_item(next_btn)
-
-    async def send_initial_message(self):
-        embed = self.build_embed()
-        await self.original_interaction.response.send_message(embed=embed, view=self, ephemeral=True)
-
-    def build_embed(self):
-        embed = discord.Embed(title="♻️ Salvage Station", description="Hancurkan ikan untuk mendapatkan **Scrap Metal** 🔩.", color=discord.Color.orange())
-        embed.set_footer(text=f"Halaman {self.page + 1}/{self.max_pages}")
-        
-        start = self.page * self.items_per_page
-        end = start + self.items_per_page
-        current_rows = self.all_rows[start:end]
-        
-        desc = ""
-        for i, (fid, name, rarity, weight, price) in enumerate(current_rows, start=1):
-            scrap = 1
-            if rarity == "Uncommon": scrap = 2
-            elif rarity == "Rare": scrap = 5
-            elif rarity == "Epic": scrap = 10
-            elif rarity == "Legendary": scrap = 20
-            
-            desc += f"`{i}.` **{name}** ({rarity}) ➡️ **{scrap} Scrap Metal**\n"
-            
-        embed.description = desc
-        return embed
-
-    async def prev_callback(self, interaction: discord.Interaction):
-        if self.page > 0:
-            self.page -= 1
-            self.update_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def next_callback(self, interaction: discord.Interaction):
-        if self.page < self.max_pages - 1:
-            self.page += 1
-            self.update_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def select_callback(self, interaction: discord.Interaction):
-        selected_ids = interaction.data["values"]
-        
-        if "salvage_all" in selected_ids:
-            await self.salvage_all_callback(interaction)
-            return
-        
-        cursor = self.cog.conn.cursor()
-        
-        total_scrap = 0
-        count = 0
-        
-        for fid in selected_ids:
-            cursor.execute('SELECT rarity FROM fish_inventory WHERE id = ?', (fid,))
-            res = cursor.fetchone()
-            if res:
-                rarity = res[0]
-                scrap = 1
-                if rarity == "Uncommon": scrap = 2
-                elif rarity == "Rare": scrap = 5
-                elif rarity == "Epic": scrap = 10
-                elif rarity == "Legendary": scrap = 20
-                
-                total_scrap += scrap
-                cursor.execute('DELETE FROM fish_inventory WHERE id = ?', (fid,))
-                count += 1
-                
-        self.cog.conn.commit()
-        self.cog.add_material(interaction.user.id, "Scrap Metal", total_scrap)
-            
-        await interaction.response.send_message(f"♻️ Berhasil salvage **{count}** ikan menjadi **{total_scrap} Scrap Metal** 🔩!", ephemeral=True)
-        
-        # Refresh
-        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (self.original_interaction.user.id,))
-        self.all_rows = cursor.fetchall()
-        self.max_pages = (len(self.all_rows) - 1) // self.items_per_page + 1
-        
-        if self.page >= self.max_pages and self.page > 0:
-            self.page = self.max_pages - 1
-            
-        self.update_components()
-        await interaction.message.edit(embed=self.build_embed(), view=self)
-
-    async def salvage_all_callback(self, interaction: discord.Interaction):
-        total_scrap = 0
-        count = 0
-        
-        for row in self.all_rows:
-            rarity = row[2]
-            scrap = 1
-            if rarity == "Uncommon": scrap = 2
-            elif rarity == "Rare": scrap = 5
-            elif rarity == "Epic": scrap = 10
-            elif rarity == "Legendary": scrap = 20
-            total_scrap += scrap
-            count += 1
-            
-        # Confirm Dialog
-        confirm_view = ConfirmSalvageAllView(self, total_scrap, count)
-        await interaction.response.send_message(f"⚠️ Yakin ingin salvage **SEMUA** ({count} ikan) menjadi **{total_scrap} Scrap Metal**?", view=confirm_view, ephemeral=True)
-
-class ConfirmSalvageAllView(discord.ui.View):
-    def __init__(self, salvage_view, total_scrap, count):
-        super().__init__(timeout=60)
-        self.salvage_view = salvage_view
-        self.total_scrap = total_scrap
-        self.count = count
-        
-    @discord.ui.button(label="✅ YA, SALVAGE SEMUA", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Add Materials
-        self.salvage_view.cog.add_material(interaction.user.id, "Scrap Metal", self.total_scrap)
-            
-        # Delete All Fish
-        cursor = self.salvage_view.cog.conn.cursor()
-        cursor.execute('DELETE FROM fish_inventory WHERE user_id = ?', (interaction.user.id,))
-        self.salvage_view.cog.conn.commit()
-        
-        # Update View
-        self.salvage_view.all_rows = []
-        self.salvage_view.page = 0
-        self.salvage_view.max_pages = 1
-        self.salvage_view.update_components()
-        
-        await self.salvage_view.original_interaction.edit_original_response(embed=self.salvage_view.build_embed(), view=self.salvage_view)
-        await interaction.response.edit_message(content=f"✅ Berhasil salvage **{self.count}** ikan menjadi **{self.total_scrap} Scrap Metal** 🔩!", view=None)
-
-    @discord.ui.button(label="❌ Batal", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="❌ Salvage dibatalkan.", view=None)
-
-class FishingForgeView(discord.ui.View):
-    def __init__(self, cog, interaction, owned_rods):
-        super().__init__(timeout=120)
-        self.cog = cog
         self.original_interaction = interaction
         self.owned_rods = owned_rods
         self.selected_rod = None
@@ -2113,20 +1971,27 @@ class FishingForgeView(discord.ui.View):
 
 
 class ConfirmSalvageView(discord.ui.View):
-    def __init__(self, salvage_view, selected_ids, total_scrap, count):
+    def __init__(self, salvage_view, selected_ids, total_scrap, count, rarity=None):
         super().__init__(timeout=60)
         self.salvage_view = salvage_view
         self.selected_ids = selected_ids
         self.total_scrap = total_scrap
         self.count = count
+        self.rarity = rarity
         
-    @discord.ui.button(label="✅ YA, SALVAGE SEMUA", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="✅ YA, SALVAGE", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         cursor = self.salvage_view.cog.conn.cursor()
         
         # Execute Deletion
-        for fid in self.selected_ids:
-             cursor.execute('DELETE FROM fish_inventory WHERE id = ?', (fid,))
+        if self.selected_ids:
+            for fid in self.selected_ids:
+                 cursor.execute('DELETE FROM fish_inventory WHERE id = ?', (fid,))
+        elif self.rarity:
+            cursor.execute('DELETE FROM fish_inventory WHERE user_id = ? AND rarity = ?', (self.salvage_view.original_interaction.user.id, self.rarity))
+        else:
+            # Salvage All
+            cursor.execute('DELETE FROM fish_inventory WHERE user_id = ?', (self.salvage_view.original_interaction.user.id,))
              
         self.salvage_view.cog.conn.commit()
         self.salvage_view.cog.add_material(interaction.user.id, "Scrap Metal", self.total_scrap)
@@ -2144,7 +2009,10 @@ class ConfirmSalvageView(discord.ui.View):
         except:
             pass
             
-        await interaction.response.edit_message(content=f"✅ Berhasil men-salvage **{self.count}** ikan menjadi **{self.total_scrap}x Scrap Metal** 🔩!", view=None)
+        rarity_text = f" ({self.rarity})" if self.rarity else ""
+        if not self.rarity and not self.selected_ids: rarity_text = " SEMUA"
+        
+        await interaction.response.edit_message(content=f"✅ Berhasil men-salvage **{self.count}** ikan{rarity_text} menjadi **{self.total_scrap}x Scrap Metal** 🔩!", view=None)
 
     @discord.ui.button(label="❌ Batal", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2180,13 +2048,8 @@ class FishingSalvageView(discord.ui.View):
                 emoji="♻️"
             ))
             
-        # Add Select All Option
-        options.insert(0, discord.SelectOption(
-            label="♻️ Salvage SEMUA di Halaman Ini",
-            description="Hancurkan semua ikan di halaman ini menjadi Scrap Metal.",
-            value="select_all",
-            emoji="⚠️"
-        ))
+        # Removed Select All from individual select to avoid clutter
+
             
         if options:
             select = discord.ui.Select(
@@ -2288,133 +2151,7 @@ class FishingSalvageView(discord.ui.View):
         except:
             pass
 
-class FishingForgeView(discord.ui.View):
-    def __init__(self, cog, interaction, owned_rods):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.original_interaction = interaction
-        self.owned_rods = owned_rods
-        self.selected_rod = None
-        
-        self.update_components()
 
-    def update_components(self):
-        self.clear_items()
-        
-        # Select Rod
-        options = []
-        for rod in self.owned_rods:
-            level = self.cog.get_rod_level(self.original_interaction.user.id, rod)
-            options.append(discord.SelectOption(
-                label=f"{rod} (+{level})",
-                value=rod,
-                emoji="🎣"
-            ))
-            
-        select = discord.ui.Select(
-            placeholder="Pilih pancingan untuk ditempa...",
-            min_values=1,
-            max_values=1,
-            options=options
-        )
-        select.callback = self.select_rod_callback
-        self.add_item(select)
-        
-        # Forge Button (Only if rod selected)
-        if self.selected_rod:
-            btn = discord.ui.Button(label="🔨 Tempa (Forge)", style=discord.ButtonStyle.danger)
-            btn.callback = self.forge_callback
-            self.add_item(btn)
-
-    async def send_initial_message(self):
-        user_scrap = self.cog.get_material(self.original_interaction.user.id, "Scrap Metal")
-        user_pearl = self.cog.get_material(self.original_interaction.user.id, "Magic Pearl")
-        
-        embed = discord.Embed(title="⚒️ Forge (Tempa Pancingan)", description="Pilih pancingan di bawah untuk melihat biaya upgrade.", color=discord.Color.dark_red())
-        embed.add_field(name="Material Kamu", value=f"🔩 Scrap Metal: **{user_scrap}**\n🔮 Magic Pearl: **{user_pearl}**", inline=False)
-        await self.original_interaction.response.send_message(embed=embed, view=self)
-
-    async def select_rod_callback(self, interaction: discord.Interaction):
-        self.selected_rod = interaction.data["values"][0]
-        self.update_components()
-        
-        # Calculate Cost
-        level = self.cog.get_rod_level(interaction.user.id, self.selected_rod)
-        next_level = level + 1
-        
-        # Get Forge Data
-        if self.selected_rod not in self.cog.forge_data or next_level not in self.cog.forge_data[self.selected_rod]["levels"]:
-             await interaction.response.send_message("❌ Data forge tidak ditemukan atau level max!", ephemeral=True)
-             return
-             
-        forge_info = self.cog.forge_data[self.selected_rod]["levels"][next_level]
-        cost_coin = forge_info["cost"]
-        cost_scrap = forge_info["scrap"]
-        cost_pearl = forge_info["pearl"]
-            
-        embed = discord.Embed(title=f"⚒️ Forge: {self.selected_rod} (+{level} ➡️ +{next_level})", color=discord.Color.dark_red())
-        embed.add_field(name="Biaya", value=f"💰 Coins: **{cost_coin:,}**\n🔩 Scrap Metal: **{cost_scrap}**\n🔮 Magic Pearl: **{cost_pearl}**", inline=False)
-        
-        # Check User Materials
-        user_scrap = self.cog.get_material(interaction.user.id, "Scrap Metal")
-        user_pearl = self.cog.get_material(interaction.user.id, "Magic Pearl")
-        
-        embed.add_field(name="Material Kamu", value=f"🔩 {user_scrap}\n🔮 {user_pearl}", inline=False)
-        
-        if user_scrap >= cost_scrap and user_pearl >= cost_pearl:
-            embed.set_footer(text="Material cukup! Klik tombol Tempa.")
-        else:
-            embed.set_footer(text="Material tidak cukup!")
-            
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    async def forge_callback(self, interaction: discord.Interaction):
-        if not self.selected_rod: return
-        
-        level = self.cog.get_rod_level(interaction.user.id, self.selected_rod)
-        next_level = level + 1
-        
-        # Get Forge Data
-        if self.selected_rod not in self.cog.forge_data or next_level not in self.cog.forge_data[self.selected_rod]["levels"]:
-             await interaction.response.send_message("❌ Data forge tidak ditemukan atau level max!", ephemeral=True)
-             return
-             
-        forge_info = self.cog.forge_data[self.selected_rod]["levels"][next_level]
-        cost_coin = forge_info["cost"]
-        cost_scrap = forge_info["scrap"]
-        cost_pearl = forge_info["pearl"]
-            
-        economy = self.cog.get_economy()
-        if not economy:
-            await interaction.response.send_message("❌ Economy Error.", ephemeral=True)
-            return
-            
-        bal = economy.get_balance(interaction.user.id)
-        user_scrap = self.cog.get_material(interaction.user.id, "Scrap Metal")
-        user_pearl = self.cog.get_material(interaction.user.id, "Magic Pearl")
-        
-        if bal < cost_coin:
-            await interaction.response.send_message(f"❌ Uang tidak cukup! Butuh {cost_coin:,} coins.", ephemeral=True)
-            return
-        if user_scrap < cost_scrap:
-            await interaction.response.send_message(f"❌ Scrap Metal kurang! Butuh {cost_scrap}x.", ephemeral=True)
-            return
-        if user_pearl < cost_pearl:
-            await interaction.response.send_message(f"❌ Magic Pearl kurang! Butuh {cost_pearl}x.", ephemeral=True)
-            return
-            
-        # Deduct Resources
-        economy.update_balance(interaction.user.id, -cost_coin)
-        self.cog.add_material(interaction.user.id, "Scrap Metal", -cost_scrap)
-        self.cog.add_material(interaction.user.id, "Magic Pearl", -cost_pearl)
-        
-        # Upgrade Rod
-        self.cog.update_rod_level(interaction.user.id, self.selected_rod, next_level)
-        
-        await interaction.response.send_message(f"🎉 **SUKSES!** {self.selected_rod} berhasil ditempa ke level **+{next_level}**!", ephemeral=True)
-        
-        # Refresh
-        await self.select_rod_callback(interaction)
 
 
 class QuestClaimView(discord.ui.View):
