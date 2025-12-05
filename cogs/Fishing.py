@@ -14,6 +14,12 @@ class Fishing(commands.Cog):
         self.conn = sqlite3.connect(DB_PATH)
         self._init_db()
         
+        # Cooldown Mappings for Manual Check
+        # Normal: 15s, Buff (Rokok Surya): 5s
+        # Cooldown Mappings for Manual Check
+        # Normal: 15s, Buff (Rokok Surya): 5s
+        self.catch_cooldowns = {}
+        
         # Fish Data
         # Fish Data Configuration
         # Format: {"name": "Name", "base_price": Price, "min_weight": MinKG, "max_weight": MaxKG, "spawn_weight": Chance}
@@ -110,6 +116,13 @@ class Fishing(commands.Cog):
             "Rare": 15,
             "Epic": 4,
             "Legendary": 1
+        }
+
+        # Buff Item Data
+        self.buff_item_data = {
+            "Rokok Surya": {"price": 15000, "duration": 300, "description": "Cooldown Mancing -10s (5 Menit)", "emoji": "🚬", "type": "cooldown", "value": 10},
+            "Kail Mata Dua": {"price": 20000, "duration": 300, "description": "20% Double Catch Chance (5 Menit)", "emoji": "🪝", "type": "double", "value": 20},
+            "Pancing Magnet": {"price": 20000, "duration": 300, "description": "+15% Scrap & +10% Pearl Chance (5 Menit)", "emoji": "🧲", "type": "loot", "value": 15}
         }
         
         # Rod Data
@@ -240,6 +253,24 @@ class Fishing(commands.Cog):
                 material_name TEXT,
                 amount INTEGER DEFAULT 0,
                 PRIMARY KEY (user_id, material_name)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS fishing_items (
+                user_id INTEGER,
+                item_name TEXT,
+                amount INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, item_name)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS fishing_buffs (
+                user_id INTEGER,
+                buff_name TEXT,
+                end_time TIMESTAMP,
+                PRIMARY KEY (user_id, buff_name)
             )
         ''')
         
@@ -434,6 +465,63 @@ class Fishing(commands.Cog):
         cursor.execute('UPDATE fishing_rods SET level = ? WHERE user_id = ? AND rod_name = ?', (new_level, user_id, rod_name))
         self.conn.commit()
 
+    # --- BUFF & ITEM HELPERS ---
+    def add_item(self, user_id, item_name, amount):
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT amount FROM fishing_items WHERE user_id = ? AND item_name = ?', (user_id, item_name))
+        res = cursor.fetchone()
+        current = res[0] if res else 0
+        new_amount = current + amount
+        
+        if new_amount <= 0:
+            cursor.execute('DELETE FROM fishing_items WHERE user_id = ? AND item_name = ?', (user_id, item_name))
+        else:
+            cursor.execute('''
+                INSERT INTO fishing_items (user_id, item_name, amount) VALUES (?, ?, ?)
+                ON CONFLICT(user_id, item_name) DO UPDATE SET amount = ?
+            ''', (user_id, item_name, new_amount, new_amount))
+        self.conn.commit()
+    
+    def get_item_amount(self, user_id, item_name):
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT amount FROM fishing_items WHERE user_id = ? AND item_name = ?', (user_id, item_name))
+        res = cursor.fetchone()
+        return res[0] if res else 0
+
+    def activate_buff(self, user_id, buff_name):
+        data = self.buff_item_data.get(buff_name)
+        if not data: return False
+        
+        duration = data['duration']
+        end_time = datetime.now() + timedelta(seconds=duration)
+        
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            INSERT INTO fishing_buffs (user_id, buff_name, end_time) VALUES (?, ?, ?)
+            ON CONFLICT(user_id, buff_name) DO UPDATE SET end_time = ?
+        ''', (user_id, buff_name, end_time, end_time))
+        self.conn.commit()
+        return end_time
+
+    def get_active_buffs(self, user_id):
+        cursor = self.conn.cursor()
+        now = datetime.now()
+        cursor.execute('SELECT buff_name, end_time FROM fishing_buffs WHERE user_id = ? AND end_time > ?', (user_id, now))
+        rows = cursor.fetchall()
+        
+        buffs = {}
+        for name, end_ts in rows:
+            # Parse timestamp if string, sqlite might return str
+            if isinstance(end_ts, str):
+                try:
+                    end_ts = datetime.fromisoformat(end_ts)
+                except:
+                    continue # Valid datetime obj usually
+            
+            buffs[name] = {"end_time": end_ts, "data": self.buff_item_data.get(name)}
+            
+        return buffs
+
     async def check_quest_progress(self, interaction, fish_name, rarity, weight):
         """Check and update quest progress (Daily & Weekly)"""
         user_id = interaction.user.id
@@ -547,15 +635,116 @@ class Fishing(commands.Cog):
             LIMIT 15
         ''')
         return cursor.fetchall()
+
     # Define Group for /fish commands
     fish_group = app_commands.Group(name="fish", description="Fishing commands")
 
-    @fish_group.command(name="catch", description="Memancing ikan (Cooldown: 15s)")
-    @app_commands.checks.cooldown(1, 15.0, key=lambda i: (i.guild_id, i.user.id))
+    async def item_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        user_id = interaction.user.id
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT item_name, amount FROM fishing_items WHERE user_id = ? AND item_name LIKE ?", (user_id, f"%{current}%"))
+        rows = cursor.fetchall()
+        
+        choices = []
+        for name, amount in rows:
+            label = f"{name} (x{amount})"
+            choices.append(app_commands.Choice(name=label, value=name))
+        
+        return choices[:25]
+
+    @fish_group.command(name="use", description="Gunakan item buff")
+    @app_commands.autocomplete(item=item_autocomplete)
+    async def fish_use(self, interaction: discord.Interaction, item: str = None):
+        user_id = interaction.user.id
+        
+        # If no item arg, show list
+        if not item:
+            # Check inventory
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT item_name, amount FROM fishing_items WHERE user_id = ?', (user_id,))
+            rows = cursor.fetchall()
+            
+            if not rows:
+                await interaction.response.send_message("🎒 Tas item lu kosong!", ephemeral=True)
+                return
+            
+            opts = [discord.SelectOption(label=f"{name} (x{amt})", value=name) for name, amt in rows]
+            view = discord.ui.View()
+            select = discord.ui.Select(placeholder="Pilih item...", options=opts)
+            
+            async def callback(inter):
+                if inter.user.id != user_id: return
+                await self.process_use_item(inter, select.values[0])
+            
+            select.callback = callback
+            view.add_item(select)
+            await interaction.response.send_message("Pilih item untuk dipakai:", view=view, ephemeral=True)
+        else:
+            await self.process_use_item(interaction, item)
+
+    async def process_use_item(self, interaction, item_name):
+        # Allow fuzzy match logic if needed, currently exact match from select
+        # Verify ownership
+        amt = self.get_item_amount(interaction.user.id, item_name)
+        if amt < 1:
+            await interaction.response.send_message("❌ Lu gak punya item itu!", ephemeral=True)
+            return
+
+        end_time = self.activate_buff(interaction.user.id, item_name)
+        if not end_time:
+             await interaction.response.send_message("❌ Item tidak valid atau error.", ephemeral=True)
+             return
+             
+        self.add_item(interaction.user.id, item_name, -1) # Consume
+        ts = int(end_time.timestamp())
+        await interaction.response.send_message(f"✅ **{item_name}** Aktif! Efek sampai <t:{ts}:R>.", ephemeral=True)
+
+    @fish_group.command(name="buffs", description="Cek buff aktif")
+    async def fish_buffs(self, interaction: discord.Interaction):
+        buffs = self.get_active_buffs(interaction.user.id)
+        if not buffs:
+            await interaction.response.send_message("❌ Tidak ada buff aktif.", ephemeral=True)
+            return
+            
+        embed = discord.Embed(title="🔥 Active Buffs", color=discord.Color.orange())
+        for name, info in buffs.items():
+            ts = int(info['end_time'].timestamp())
+            data = info['data']
+            embed.add_field(name=f"{data['emoji']} {name}", value=f"Ends <t:{ts}:R>\nEffect: {data['description']}", inline=False)
+            
+        await interaction.response.send_message(embed=embed)
+
+
+
+    @fish_group.command(name="catch", description="Memancing ikan")
     async def catch(self, interaction: discord.Interaction):
-        # Get Equipped Rod Stats
-        equipped_rod = self.get_equipped_rod(interaction.user.id)
-        rod_level = self.get_rod_level(interaction.user.id, equipped_rod)
+        # 0. Manual Cooldown Logic to Support Buffs
+        # Standard Cooldown: 15s. With Buff: 5s.
+        user_id = interaction.user.id
+        buffs = self.get_active_buffs(user_id)
+        
+        cooldown_duration = 15.0
+        
+        if "Rokok Surya" in buffs:
+            cooldown_duration = 5.0 # -10s
+
+        now = interaction.created_at.timestamp()
+        last_time = self.catch_cooldowns.get(user_id, 0)
+        
+        if now - last_time < cooldown_duration:
+            retry_after = cooldown_duration - (now - last_time)
+            try:
+                buff_msg = '(Buff Rokok Aktif 🚬)' if 'Rokok Surya' in buffs else ''
+                await interaction.response.send_message(f"⏳ Hadeh... sabar **{retry_after:.1f}s** lagi! {buff_msg}", ephemeral=True)
+            except:
+                pass
+            return
+            
+        self.catch_cooldowns[user_id] = now
+
+        # 1. Get Equipped Rod and Stats
+        equipped_rod = self.get_equipped_rod(user_id)
+        rod_level = self.get_rod_level(user_id, equipped_rod)
         rod_stats = self.rod_data.get(equipped_rod, self.rod_data["Common Rod"])
         
         # Calculate Total Boosts
@@ -567,68 +756,107 @@ class Fishing(commands.Cog):
         weight_boost = base_weight_boost + (rod_level * scaling_weight)
         rarity_boost = base_rarity_boost + (rod_level * scaling_rarity)
         
-        # 1. Rarity Roll (Apply Boost)
-        rarities = list(self.rarity_weights.keys())
-        rarity_weights = list(self.rarity_weights.values())
-        
-        # Boost logic: Increase weight of higher rarities based on rod
-        if rarity_boost > 0:
-            rarity_weights[2] += rarity_boost # Rare
-            rarity_weights[3] += rarity_boost # Epic
-            rarity_weights[4] += rarity_boost # Legendary
+        # Apply Buffs
+        loot_boost = 0
+        pearl_boost = 0
+        if "Pancing Magnet" in buffs:
+            loot_boost = 0.15
+            pearl_boost = 0.10
             
-        rarity = random.choices(rarities, weights=rarity_weights, k=1)[0]
+        double_catch_chance = 0
+        if "Kail Mata Dua" in buffs:
+            double_catch_chance = 0.20
+            
+        # Determine number of fish (Double Catch)
+        fish_count = 1
+        is_double = False
+        if random.random() < double_catch_chance:
+            fish_count = 2
+            is_double = True
+            
+        caught_items = []
+        total_xp = 0 # Not used but good to track if needed
         
-        # 2. Fish Roll (Weighted by spawn_weight)
-        fish_list = self.fish_data[rarity]
-        fish_weights = [f["spawn_weight"] for f in fish_list]
-        fish_info = random.choices(fish_list, weights=fish_weights, k=1)[0]
-        
-        name = fish_info["name"]
-        image_url = fish_info.get("image_url")
-        base_price = fish_info["base_price"]
-        min_w = fish_info["min_weight"]
-        max_w = fish_info["max_weight"]
-        
-        # 3. Weight Roll (Random between min and max) * Boost
-        raw_weight = random.uniform(min_w, max_w)
-        weight = round(raw_weight * weight_boost, 2)
-        
-        # 4. Final Price Calculation
-        # Price increases linearly with weight: Min Weight = Base Price
-        weight_multiplier = weight / min_w
-        final_price = int(base_price * weight_multiplier)
-        
-        # Save to DB
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            INSERT INTO fish_inventory (user_id, fish_name, rarity, weight, price)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (interaction.user.id, name, rarity, weight, final_price))
-        
-        # Increment total_catches
+        for _ in range(fish_count):
+            # 2. Rarity Roll
+            rarities = list(self.rarity_weights.keys())
+            rarity_weights = list(self.rarity_weights.values())
+            
+            if rarity_boost > 0:
+                rarity_weights[2] += rarity_boost # Rare
+                rarity_weights[3] += rarity_boost # Epic
+                rarity_weights[4] += rarity_boost # Legendary
+                
+            rarity = random.choices(rarities, weights=rarity_weights, k=1)[0]
+            
+            # 3. Fish Roll
+            fish_list = self.fish_data[rarity]
+            fish_weights = [f["spawn_weight"] for f in fish_list]
+            fish_info = random.choices(fish_list, weights=fish_weights, k=1)[0]
+            
+            name = fish_info["name"]
+            image_url = fish_info.get("image_url") # Only last image used if double
+            base_price = fish_info["base_price"]
+            min_w = fish_info["min_weight"]
+            max_w = fish_info["max_weight"]
+            
+            # 4. Weight & Price
+            raw_weight = random.uniform(min_w, max_w)
+            weight = round(raw_weight * weight_boost, 2)
+            weight_multiplier = weight / min_w
+            final_price = int(base_price * weight_multiplier)
+            
+            # Save
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO fish_inventory (user_id, fish_name, rarity, weight, price)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (user_id, name, rarity, weight, final_price))
+            
+            caught_items.append({
+                "name": name, "rarity": rarity, "weight": weight, "price": final_price, "image": image_url
+            })
+            self.conn.commit()
+            
+            # Quest Check
+            self.generate_quests(user_id) 
+            await self.check_quest_progress(interaction, name, rarity, weight)
+
+        # 5. Profile Update
         cursor.execute('''
             INSERT INTO fishing_profile (user_id, total_catches) 
-            VALUES (?, 1)
-            ON CONFLICT(user_id) DO UPDATE SET total_catches = total_catches + 1
-        ''', (interaction.user.id,))
-        
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET total_catches = total_catches + ?
+        ''', (user_id, fish_count, fish_count))
         self.conn.commit()
         
-        # Material Drop Chance
+        # 6. Material Drops
         material_msg = ""
-        # 10% chance for Scrap Metal
-        if random.random() < 0.10:
+        # Scrap: 10% + Buff
+        scrap_chance = 0.10 + loot_boost
+        if random.random() < scrap_chance:
             scrap_amount = random.randint(1, 3)
-            self.add_material(interaction.user.id, "Scrap Metal", scrap_amount)
-            material_msg = f"\n🔩 Kamu menemukan **{scrap_amount}x Scrap Metal**!"
+            self.add_material(user_id, "Scrap Metal", scrap_amount)
+            material_msg = f"\n🔩 **{scrap_amount}x Scrap Metal**!"
             
-        # 1% chance for Magic Pearl (only if Rare+)
-        if rarity in ["Rare", "Epic", "Legendary"] and random.random() < 0.01:
-            self.add_material(interaction.user.id, "Magic Pearl", 1)
-            material_msg += f"\n🔮 WOW! Kamu menemukan **1x Magic Pearl**!"
+        # Pearl: 1% + Buff (Rare+ only)
+        # Check highest rarity caught
+        best_rarity = "Common"
+        priority = ["Common", "Uncommon", "Rare", "Epic", "Legendary"]
+        for c in caught_items:
+            if priority.index(c['rarity']) > priority.index(best_rarity):
+                best_rarity = c['rarity']
+                
+        if best_rarity in ["Rare", "Epic", "Legendary"]:
+            pearl_chance = 0.01 + pearl_boost
+            if random.random() < pearl_chance:
+                self.add_material(user_id, "Magic Pearl", 1)
+                material_msg += f"\n🔮 **1x Magic Pearl**!"
 
-        # Embed
+        # 7. Embed
+        # Restore "Main Fish" focus style
+        main_fish = caught_items[0]
+        
         color_map = {
             "Common": discord.Color.light_grey(),
             "Uncommon": discord.Color.green(),
@@ -637,40 +865,49 @@ class Fishing(commands.Cog):
             "Legendary": discord.Color.gold()
         }
         
+        # Determine Title (Main Fish)
+        # Classic Style: Just the fish name or "You caught x"
+        # User said "not like before", likely means they prefer the stats in Fields, not Description.
+        
         embed = discord.Embed(
-            title="🎣 Hasil Pancingan",
-            description=f"Kamu mendapatkan **{name}**!{material_msg}",
-            color=color_map.get(rarity, discord.Color.default())
+            title=f"🎣 Hasil Pancingan",
+            description=f"Kamu mendapatkan **{main_fish['name']}! **",
+            color=color_map.get(main_fish['rarity'], discord.Color.default())
         )
-        embed.add_field(name="Rarity", value=rarity, inline=True)
-        embed.add_field(name="Berat", value=f"{weight} kg", inline=True)
-        embed.add_field(name="Harga", value=f"💰 {final_price}", inline=True)
         
-        if image_url:
-            embed.set_image(url=image_url)
+        # Main Fish Details (Fields)
+        embed.add_field(name="Rarity", value=f"{main_fish['rarity']}", inline=True)
+        embed.add_field(name="Berat", value=f"{main_fish['weight']} kg", inline=True)
+        embed.add_field(name="Harga", value=f"💰 {main_fish['price']}", inline=True)
         
-        footer_text = ""
-        if equipped_rod != "Common Rod" or rod_level > 0:
-            footer_text = f"Rod: {equipped_rod} +{rod_level} | Bonus: +{int(round((weight_boost-1)*100))}% Weight"
-        
-        if footer_text:
-            embed.set_footer(text=footer_text)
+        if main_fish['image']:
+            embed.set_image(url=main_fish['image'])
             
-        self.generate_quests(interaction.user.id) # Ensure quests exist
-        await self.check_quest_progress(interaction, name, rarity, weight)
+        # Add Second Fish (Double Catch) if exists
+        if len(caught_items) > 1:
+            bonus_fish = caught_items[1]
+            embed.add_field(name="✨ DOUBLE CATCH!", value=f"**{bonus_fish['name']}** ({bonus_fish['rarity']})\n{bonus_fish['weight']}kg | 💰 {bonus_fish['price']}", inline=False)
+            
+        # Materials
+        if material_msg:
+             embed.add_field(name="`📦 Extra Loot`", value=f">> - {material_msg.strip()}", inline=True)
+        
+        # Footer Stats
+        weight_bonus_pct = int((weight_boost - 1.0) * 100)
+        footer_text = f"Rod: {equipped_rod} +{rod_level} | Bonus: +{weight_bonus_pct}% Weight"
+        
+        buff_icons = []
+        if "Rokok Surya" in buffs: buff_icons.append("🚬")
+        if "Kail Mata Dua" in buffs: buff_icons.append(":hook:")
+        if "Pancing Magnet" in buffs: buff_icons.append("🧲")
+        
+        if buff_icons:
+            footer_text += f" | Buffs: {' '.join(buff_icons)}"
+            
+        embed.set_footer(text=footer_text)
         
         await interaction.response.send_message(embed=embed)
 
-    @catch.error
-    async def catch_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_commands.CommandOnCooldown):
-            try:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(f"⏳ Tunggu **{error.retry_after:.1f}s** lagi sebelum memancing!", ephemeral=True)
-                else:
-                    await interaction.followup.send(f"⏳ Tunggu **{error.retry_after:.1f}s** lagi sebelum memancing!", ephemeral=True)
-            except Exception:
-                pass
 
     @fish_group.command(name="inventory", description="Lihat hasil pancinganmu")
     async def inventory(self, interaction: discord.Interaction):
@@ -1504,169 +1741,194 @@ class TradeChallengeView(discord.ui.View):
         await interaction.response.edit_message(content=f"❌ {self.target.mention} declined the trade.", view=None)
 
 class FishShopView(discord.ui.View):
-    def __init__(self, cog, user):
-        super().__init__(timeout=60)
+    def __init__(self, cog, user, tab="rods"):
+        super().__init__(timeout=120)
         self.cog = cog
         self.user = user
-        self.update_components()
+        self.tab = tab # 'rods' or 'items'
+        self.update_buttons()
 
-    def update_components(self):
+    def update_buttons(self):
         self.clear_items()
         
-        owned_rods = self.cog.get_owned_rods(self.user.id)
+        # Tab Buttons
+        # Use simple logic: if tab is active, use Primary style and disable? Or just keep enabled to allow toggle.
+        # Common pattern: Active = Primary/Success, Inactive = Secondary
+        style_rods = discord.ButtonStyle.primary if self.tab == "rods" else discord.ButtonStyle.secondary
+        style_items = discord.ButtonStyle.primary if self.tab == "items" else discord.ButtonStyle.secondary
         
-        options = []
-        for rod_name, stats in self.cog.rod_data.items():
-            if rod_name == "Common Rod": continue # Cannot buy default
-            
-            price = stats["price"]
-            emoji = stats["emoji"]
-            is_owned = rod_name in owned_rods
-            
-            label = f"{rod_name} - 💰{price:,}" if not is_owned else f"{rod_name} (Owned)"
-            desc = f"Weight x{stats['weight_boost']} | Rarity +{stats['rarity_boost']}%"
-            
-            options.append(discord.SelectOption(
-                label=label,
-                description=desc,
-                value=rod_name,
-                emoji=emoji,
-                default=False
-            ))
-            
-        # Add Lucky Charm
-        options.append(discord.SelectOption(
-            label="Lucky Charm - 💰100,000",
-            description="Increase forge success rate significantly!",
-            value="Lucky Charm",
-            emoji="🍀",
-            default=False
-        ))
-
-        # Add Magic Pearl
-        options.append(discord.SelectOption(
-            label="Magic Pearl - 💰250,000",
-            description="Used for forging rods (Required for high levels)",
-            value="Magic Pearl",
-            emoji="🔮",
-            default=False
-        ))
-            
-        select = discord.ui.Select(placeholder="Buy a fishing rod or item...", options=options)
-        select.callback = self.callback
-        self.add_item(select)
+        self.add_item(ShopTabButton(label="🎣 Joran (Rods)", style=style_rods, custom_id="tab_rods", row=0))
+        self.add_item(ShopTabButton(label="🎒 Buff & Items", style=style_items, custom_id="tab_items", row=0))
+        
+        # Content Selects
+        if self.tab == "rods":
+            self.add_item(ShopRodSelect(self.cog, self.user, row=1))
+        else:
+            self.add_item(ShopItemSelect(self.cog, self.user, row=1))
 
     def build_embed(self):
-        embed = discord.Embed(title="🎣 Fishing Shop", color=discord.Color.gold())
-        embed.description = "Upgrade your rod to catch bigger and rarer fish!"
+        embed = discord.Embed(title="🏪 Fishing Shop", color=discord.Color.gold())
         
-        owned_rods = self.cog.get_owned_rods(self.user.id)
-        equipped = self.cog.get_equipped_rod(self.user.id)
-        
-        for rod_name, stats in self.cog.rod_data.items():
-            status = "✅ Owned" if rod_name in owned_rods else f"💰 {stats['price']:,}"
-            if rod_name == equipped: status += " (Equipped)"
+        if self.tab == "rods":
+            embed.description = "Upgrade pancinganmu biar makin gacor!"
+            for rod, data in self.cog.rod_data.items():
+                if rod == "Common Rod": continue
+                owned = rod in self.cog.get_owned_rods(self.user.id)
+                status = "✅ Dimiliki" if owned else f"💰 {data['price']:,}"
+                
+                embed.add_field(
+                    name=f"{data['emoji']} {rod}",
+                    value=f"**{status}**\nBoost: +{int((data['weight_boost']-1)*100)}% Weight, +{data['rarity_boost']} Rarity",
+                    inline=False
+                )
             
-            embed.add_field(
-                name=f"{stats['emoji']} {rod_name}",
-                value=f"**Price:** {status}\n**Stats:** Weight x{stats['weight_boost']} | Rarity +{stats['rarity_boost']}%",
-                inline=False
-            )
+            # Lucky Charm & Pearl Info (Shown in Rods tab or separate? Maybe separate or bottom)
+            # For simplicity, keep them in Rod/General tab or move to Items? 
+            # User asked for "Tabs". Let's put specialized materials in Items tab maybe? 
+            # Or keep Rods purely for Rods.
+            # Let's put all "Materials" in Items tab.
             
-        # Add Lucky Charm Info
-        user_charm = self.cog.get_material(self.user.id, "Lucky Charm")
-        embed.add_field(
-            name="🍀 Lucky Charm",
-            value=f"**Price:** 💰 100,000\n**Effect:** +50% Forge Success Rate\n**Owned:** {user_charm}",
-            inline=False
-        )
+        else:
+            embed.description = "Item Buff & Material untuk mempermudah hidup pemancing!"
+            
+            # Buffs
+            for item, data in self.cog.buff_item_data.items():
+                 embed.add_field(
+                    name=f"{data['emoji']} {item}",
+                    value=f"💰 **{data['price']:,}**\n⏱️ {data['duration']//60} Menit\nℹ️ {data['description']}",
+                    inline=False
+                )
+            
+            embed.add_field(name="──────────────", value="**Special Items**", inline=False)
+            
+            # Special Items hardcoded for now or from data
+            embed.add_field(name="🍀 Lucky Charm", value="💰 **100,000**\nEffect: +50% Forge Rate", inline=True)
+            embed.add_field(name="🔮 Magic Pearl", value="💰 **250,000**\nEffect: Forge Material", inline=True)
+            
+        # Balance Footer
+        economy = self.cog.get_economy()
+        bal = economy.get_balance(self.user.id) if economy else 0
+        embed.set_footer(text=f"Saldo Anda: {bal:,} coins")
         
-        # Add Magic Pearl Info
-        user_pearl = self.cog.get_material(self.user.id, "Magic Pearl")
-        embed.add_field(
-            name="🔮 Magic Pearl",
-            value=f"**Price:** 💰 250,000\n**Effect:** Essential material for forging\n**Owned:** {user_pearl}",
-            inline=False
-        )
         return embed
 
+class ShopTabButton(discord.ui.Button):
+    def __init__(self, label, style, custom_id, row):
+        super().__init__(label=label, style=style, custom_id=custom_id, row=row)
+
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user.id:
-            await interaction.response.send_message("❌ This shop is not for you!", ephemeral=True)
+        view: FishShopView = self.view
+        if view.user.id != interaction.user.id:
+            await interaction.response.send_message("❌ Ini bukan sesi shop kamu!", ephemeral=True)
             return
-            
-        rod_name = interaction.data["values"][0]
         
-        # Handle Lucky Charm Purchase
-        if rod_name == "Lucky Charm":
+        view.tab = "rods" if self.custom_id == "tab_rods" else "items"
+        view.update_buttons()
+        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+
+class ShopItemSelect(discord.ui.Select):
+    def __init__(self, cog, user, row):
+        options = []
+        # Buffs
+        for item, data in cog.buff_item_data.items():
+            options.append(discord.SelectOption(
+                label=item,
+                description=f"💰 {data['price']:,} - {data['description']}",
+                value=item,
+                emoji=data['emoji']
+            ))
+            
+        # Special Items
+        options.append(discord.SelectOption(label="Lucky Charm", description="💰 100,000 - Increase Forge Chance", value="Lucky Charm", emoji="🍀"))
+        options.append(discord.SelectOption(label="Magic Pearl", description="💰 250,000 - Forge Material", value="Magic Pearl", emoji="🔮"))
+            
+        super().__init__(placeholder="Pilih item untuk dibeli...", min_values=1, max_values=1, options=options, row=row)
+        self.cog = cog
+        self.user_obj = user
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_obj.id:
+            await interaction.response.send_message("❌ Not your session!", ephemeral=True)
+            return
+
+        item_name = self.values[0]
+        price = 0
+        is_buff = False
+        
+        if item_name in self.cog.buff_item_data:
+            price = self.cog.buff_item_data[item_name]['price']
+            is_buff = True
+        elif item_name == "Lucky Charm":
             price = 100000
-            economy = self.cog.get_economy()
-            if not economy:
-                await interaction.response.send_message("❌ Economy system error.", ephemeral=True)
-                return
-                
-            bal = economy.get_balance(self.user.id)
-            if bal < price:
-                await interaction.response.send_message(f"❌ Not enough money! You need **{price:,}** coins.", ephemeral=True)
-                return
-                
-            economy.update_balance(self.user.id, -price)
-            self.cog.add_material(self.user.id, "Lucky Charm", 1)
-            
-            await interaction.response.send_message(f"🎉 Successfully bought **1x Lucky Charm** 🍀!", ephemeral=True)
-            self.update_components()
-            await interaction.message.edit(embed=self.build_embed(), view=self)
-            return
-
-        # Handle Magic Pearl Purchase
-        if rod_name == "Magic Pearl":
+        elif item_name == "Magic Pearl":
             price = 250000
-            economy = self.cog.get_economy()
-            if not economy:
-                await interaction.response.send_message("❌ Economy system error.", ephemeral=True)
-                return
-                
-            bal = economy.get_balance(self.user.id)
-            if bal < price:
-                await interaction.response.send_message(f"❌ Not enough money! You need **{price:,}** coins.", ephemeral=True)
-                return
-                
-            economy.update_balance(self.user.id, -price)
-            self.cog.add_material(self.user.id, "Magic Pearl", 1)
-            
-            await interaction.response.send_message(f"🎉 Successfully bought **1x Magic Pearl** 🔮!", ephemeral=True)
-            self.update_components()
-            await interaction.message.edit(embed=self.build_embed(), view=self)
+        
+        economy = self.cog.get_economy()
+        if not economy:
+             await interaction.response.send_message("❌ Economy system error.", ephemeral=True)
+             return
+
+        bal = economy.get_balance(interaction.user.id)
+        
+        if bal < price:
+            await interaction.response.send_message(f"❌ Duit lu kurang bos! Butuh {price:,}", ephemeral=True)
             return
 
-        price = self.cog.rod_data[rod_name]["price"]
-        owned_rods = self.cog.get_owned_rods(self.user.id)
+        economy.update_balance(interaction.user.id, -price)
         
-        if rod_name in owned_rods:
-            await interaction.response.send_message("✅ You already own this rod!", ephemeral=True)
-            return
+        if is_buff:
+            self.cog.add_item(interaction.user.id, item_name, 1)
+        else:
+            self.cog.add_material(interaction.user.id, item_name, 1)
+        
+        await interaction.response.send_message(f"✅ Berhasil membeli **{item_name}**!", ephemeral=True)
+        # Refresh View (Balance update)
+        await interaction.message.edit(embed=self.view.build_embed(), view=self.view)
+
+class ShopRodSelect(discord.ui.Select):
+    def __init__(self, cog, user, row):
+        options = []
+        for rod, data in cog.rod_data.items():
+            if rod == "Common Rod": continue
+            options.append(discord.SelectOption(
+                label=rod,
+                description=f"Price: {data['price']:,}",
+                value=rod,
+                emoji=data['emoji']
+            ))
+        super().__init__(placeholder="Pilih joran untuk dibeli...", min_values=1, max_values=1, options=options, row=row)
+        self.cog = cog
+        self.user_obj = user
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_obj.id:
+            return await interaction.response.send_message("❌ This is not your shop interaction!", ephemeral=True)
+        
+        rod_name = self.values[0]
+        rod_data = self.cog.rod_data[rod_name]
+        price = rod_data["price"]
+        
+        # Check if owned
+        owned = self.cog.get_owned_rods(interaction.user.id)
+        if rod_name in owned:
+            return await interaction.response.send_message("❌ You already own this rod!", ephemeral=True)
             
         economy = self.cog.get_economy()
         if not economy:
-            await interaction.response.send_message("❌ Economy system error.", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Economy system not loaded.", ephemeral=True)
             
-        bal = economy.get_balance(self.user.id)
+        bal = economy.get_balance(interaction.user.id)
         if bal < price:
-            await interaction.response.send_message(f"❌ Not enough money! You need **{price:,}** coins.", ephemeral=True)
-            return
-            
-        # Buy logic
-        economy.update_balance(self.user.id, -price)
+             return await interaction.response.send_message("❌ Insufficient funds!", ephemeral=True)
+             
+        economy.update_balance(interaction.user.id, -price)
         
         cursor = self.cog.conn.cursor()
-        cursor.execute('INSERT INTO fishing_rods (user_id, rod_name) VALUES (?, ?)', (self.user.id, rod_name))
+        cursor.execute("INSERT INTO fishing_rods (user_id, rod_name) VALUES (?, ?)", (interaction.user.id, rod_name))
         self.cog.conn.commit()
         
-        await interaction.response.send_message(f"🎉 Successfully bought **{rod_name}**!", ephemeral=True)
-        
-        self.update_components()
-        await interaction.message.edit(embed=self.build_embed(), view=self)
+        await interaction.response.send_message(f"✅ Successfully bought **{rod_name}**!", ephemeral=True)
+        await interaction.message.edit(embed=self.view.build_embed(), view=self.view)
 
 class RodEquipView(discord.ui.View):
     def __init__(self, cog, user):
