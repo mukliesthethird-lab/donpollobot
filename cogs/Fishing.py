@@ -1011,7 +1011,7 @@ class FishingInventoryView(discord.ui.View):
         total_value = sum(row[4] for row in self.all_rows)
         
         embed = discord.Embed(title=f"🎒 Tas Ikan {self.original_interaction.user.display_name}", color=discord.Color.blue())
-        embed.set_footer(text=f"Total Nilai: {total_value:,} koin | Halaman {self.page + 1}/{self.max_pages}")
+        embed.set_footer(text=f"Total Ikan: {len(self.all_rows)} | Total Nilai: {total_value:,} koin | Halaman {self.page + 1}/{self.max_pages}")
         
         start = self.page * self.items_per_page
         end = start + self.items_per_page
@@ -2215,7 +2215,7 @@ class FishingSalvageView(discord.ui.View):
     def build_embed(self):
         embed = discord.Embed(title=f"♻️ Salvage Ikan (Scrap Metal)", color=discord.Color.orange())
         embed.description = "Pilih ikan yang ingin dihancurkan menjadi **Scrap Metal**.\n*Ikan yang di-salvage akan hilang permanen!*"
-        embed.set_footer(text=f"Halaman {self.page + 1}/{self.max_pages}")
+        embed.set_footer(text=f"Total Ikan: {len(self.all_rows)} | Halaman {self.page + 1}/{self.max_pages}")
         return embed
 
     async def prev_callback(self, interaction: discord.Interaction):
