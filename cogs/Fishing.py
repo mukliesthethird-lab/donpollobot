@@ -4,6 +4,7 @@ from discord.ext import commands
 import sqlite3
 import random
 import aiohttp
+from datetime import datetime, timedelta
 
 DB_PATH = 'database.db'
 
@@ -253,6 +254,148 @@ class Fishing(commands.Cog):
         except sqlite3.OperationalError:
             pass # Column likely exists
             
+        # Create fishing_quests table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS fishing_quests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                quest_type TEXT,
+                target_criteria TEXT,
+                target_value INTEGER,
+                progress INTEGER DEFAULT 0,
+                reward_amount INTEGER,
+                is_claimed BOOLEAN DEFAULT 0,
+                created_at DATE,
+                quest_period TEXT DEFAULT 'daily',
+                expiration_date TIMESTAMP,
+                reward_type TEXT DEFAULT 'coin',
+                reward_name TEXT
+            )
+        ''')
+        
+        self.conn.commit()
+        
+        # Migration for Quests (Add new columns)
+        # Migration for Quests (Add new columns)
+        try:
+            cursor.execute("ALTER TABLE fishing_quests ADD COLUMN quest_period TEXT DEFAULT 'daily'")
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute("ALTER TABLE fishing_quests ADD COLUMN expiration_date TIMESTAMP")
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute("ALTER TABLE fishing_quests ADD COLUMN reward_type TEXT DEFAULT 'coin'")
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute("ALTER TABLE fishing_quests ADD COLUMN reward_name TEXT")
+        except sqlite3.OperationalError:
+            pass
+        self.conn.commit()
+
+    def generate_quests(self, user_id):
+        """Generate Daily and Weekly quests with variations"""
+        cursor = self.conn.cursor()
+        now = datetime.now()
+        today_str = now.strftime('%Y-%m-%d')
+        
+        # --- DAILY QUESTS (5 per day) ---
+        cursor.execute('SELECT id FROM fishing_quests WHERE user_id = ? AND quest_period = ? AND created_at = ?', (user_id, 'daily', today_str))
+        if not cursor.fetchone():
+            daily_templates = [
+                {"type": "catch_any", "criteria": "any", "min": 10, "max": 20, "reward_mult": 20},
+                {"type": "catch_rarity", "criteria": "Common", "min": 10, "max": 15, "reward_mult": 30},
+                {"type": "catch_rarity", "criteria": "Uncommon", "min": 5, "max": 10, "reward_mult": 50},
+                {"type": "catch_rarity", "criteria": "Rare", "min": 2, "max": 5, "reward_mult": 100},
+                {"type": "catch_weight", "criteria": "2", "min": 5, "max": 10, "reward_mult": 40}, # > 2kg
+                {"type": "catch_weight", "criteria": "5", "min": 2, "max": 5, "reward_mult": 80}, # > 5kg
+                {"type": "catch_weight", "criteria": "1", "min": 10, "max": 15, "reward_mult": 30}, # > 1kg (Actually logic says >= criteria, so this works)
+                {"type": "total_weight", "criteria": "total", "min": 20, "max": 30, "reward_mult": 10},
+                {"type": "total_weight", "criteria": "total", "min": 40, "max": 50, "reward_mult": 10},
+                {"type": "catch_specific", "criteria": "Ikan Mas", "min": 5, "max": 5, "reward_mult": 50},
+                {"type": "catch_specific", "criteria": "Lele", "min": 5, "max": 5, "reward_mult": 50},
+                {"type": "catch_specific", "criteria": "Nila", "min": 5, "max": 5, "reward_mult": 50},
+                {"type": "catch_specific", "criteria": "Gurame", "min": 3, "max": 3, "reward_mult": 80},
+                {"type": "catch_specific", "criteria": "Patin", "min": 3, "max": 3, "reward_mult": 80},
+                {"type": "catch_specific", "criteria": "Bawal Hitam", "min": 3, "max": 3, "reward_mult": 80},
+            ]
+            
+            selected_daily = random.sample(daily_templates, 5)
+            expiry_daily = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            for quest in selected_daily:
+                target_val = random.randint(quest["min"], quest["max"])
+                
+                # Reward Logic (70% Coin, 30% Scrap Metal)
+                reward_type = 'coin'
+                reward_name = None
+                reward_amount = 0
+                
+                if random.random() < 0.30:
+                    reward_type = 'material'
+                    reward_name = 'Scrap Metal'
+                    reward_amount = random.randint(1, 5)
+                else:
+                    reward_amount = target_val * quest["reward_mult"] + random.randint(50, 200)
+                
+                cursor.execute('''
+                    INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 'daily', ?)
+                ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, today_str, expiry_daily))
+
+        # --- WEEKLY QUESTS (3 per week, reset Friday) ---
+        # Calculate start of week (Friday)
+        # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+        # If today is Fri (4), offset is 0. If Sat (5), offset 1. If Thu (3), offset 6 (last Fri).
+        # (now.weekday() - 4) % 7 gives days since last Friday.
+        days_since_friday = (now.weekday() - 4) % 7
+        start_of_week = (now - timedelta(days=days_since_friday)).strftime('%Y-%m-%d')
+        
+        cursor.execute('SELECT id FROM fishing_quests WHERE user_id = ? AND quest_period = ? AND created_at = ?', (user_id, 'weekly', start_of_week))
+        if not cursor.fetchone():
+            weekly_templates = [
+                {"type": "catch_rarity", "criteria": "Legendary", "min": 3, "max": 5, "reward_mult": 2000},
+                {"type": "catch_rarity", "criteria": "Epic", "min": 10, "max": 15, "reward_mult": 500},
+                {"type": "catch_rarity", "criteria": "Rare", "min": 30, "max": 50, "reward_mult": 150},
+                {"type": "total_weight", "criteria": "total", "min": 300, "max": 400, "reward_mult": 20},
+                {"type": "total_weight", "criteria": "total", "min": 450, "max": 500, "reward_mult": 20},
+                {"type": "catch_weight", "criteria": "10", "min": 20, "max": 20, "reward_mult": 200}, # > 10kg x20
+                {"type": "catch_weight", "criteria": "50", "min": 5, "max": 5, "reward_mult": 500}, # > 50kg x5
+                {"type": "catch_any", "criteria": "any", "min": 300, "max": 300, "reward_mult": 30},
+                {"type": "catch_weight", "criteria": "100", "min": 1, "max": 2, "reward_mult": 2000}, # > 100kg (Hard)
+                {"type": "total_weight", "criteria": "total", "min": 600, "max": 800, "reward_mult": 25}, # Extreme Grind
+            ]
+            
+            selected_weekly = random.sample(weekly_templates, 3)
+            # Expiry: Next Friday
+            expiry_weekly = (now + timedelta(days=(7 - days_since_friday))).replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            for quest in selected_weekly:
+                target_val = random.randint(quest["min"], quest["max"])
+                
+                # Reward Logic (60% Coin, 40% Magic Pearl)
+                reward_type = 'coin'
+                reward_name = None
+                reward_amount = 0
+                
+                if random.random() < 0.40:
+                    reward_type = 'material'
+                    reward_name = 'Magic Pearl'
+                    reward_amount = random.randint(1, 3)
+                else:
+                    base_reward = target_val * quest["reward_mult"]
+                    reward_amount = min(base_reward + random.randint(1000, 3000), 15000) # Max 15k
+                
+                cursor.execute('''
+                    INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 'weekly', ?)
+                ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, start_of_week, expiry_weekly))
+        
         self.conn.commit()
 
     def get_material(self, user_id, material_name):
@@ -290,6 +433,61 @@ class Fishing(commands.Cog):
         
         cursor.execute('UPDATE fishing_rods SET level = ? WHERE user_id = ? AND rod_name = ?', (new_level, user_id, rod_name))
         self.conn.commit()
+
+    async def check_quest_progress(self, interaction, fish_name, rarity, weight):
+        """Check and update quest progress (Daily & Weekly)"""
+        user_id = interaction.user.id
+        now = datetime.now()
+        cursor = self.conn.cursor()
+        
+        # Check active quests (not claimed, not expired)
+        cursor.execute('''
+            SELECT id, quest_type, target_criteria, target_value, progress 
+            FROM fishing_quests 
+            WHERE user_id = ? AND is_claimed = 0 AND (expiration_date IS NULL OR expiration_date > ?)
+        ''', (user_id, now))
+        
+        active_quests = cursor.fetchall()
+        
+        completed_quests = []
+        
+        for q_id, q_type, criteria, target, progress in active_quests:
+            if progress >= target:
+                continue
+                
+            increment = 0
+            if q_type == "catch_any":
+                increment = 1
+            elif q_type == "catch_rarity" and criteria == rarity:
+                increment = 1
+            elif q_type == "catch_weight" and weight >= float(criteria):
+                increment = 1
+            elif q_type == "catch_specific" and criteria.lower() == fish_name.lower():
+                increment = 1
+            elif q_type == "total_weight":
+                increment = int(weight) # Or float if DB supports it, but progress is INT. Let's round or accumulate scaled.
+                # Since progress is INT, let's just add weight as INT for simplicity or change schema to REAL. 
+                # Schema is INTEGER. Let's round weight to nearest int or just int(weight).
+                # Better: int(weight * 10) to keep 1 decimal precision if needed, but for now int(weight) is fine for "Total 50kg".
+                # Actually, if catch is 0.5kg, int is 0. Let's use ceil or accumulate 1 for any catch? No.
+                # Let's assume target is in KG. If we want precision, we need REAL.
+                # For now, let's just add weight.
+                increment = max(1, int(weight)) 
+            
+            if increment > 0:
+                new_progress = progress + increment
+                cursor.execute('UPDATE fishing_quests SET progress = ? WHERE id = ?', (new_progress, q_id))
+                
+                if new_progress >= target:
+                    completed_quests.append(q_id)
+        
+        self.conn.commit()
+        
+        if completed_quests:
+            try:
+                await interaction.followup.send("🎉 **Quest Selesai!** Cek `/fish quests` untuk klaim hadiah.", ephemeral=True)
+            except:
+                pass
 
     def get_economy(self):
         return self.bot.get_cog('Economy')
@@ -458,6 +656,9 @@ class Fishing(commands.Cog):
         if footer_text:
             embed.set_footer(text=footer_text)
             
+        self.generate_quests(interaction.user.id) # Ensure quests exist
+        await self.check_quest_progress(interaction, name, rarity, weight)
+        
         await interaction.response.send_message(embed=embed)
 
     @catch.error
@@ -503,10 +704,132 @@ class Fishing(commands.Cog):
         if user.bot:
             await interaction.response.send_message("❌ You cannot trade with bots!", ephemeral=True)
             return
-            
-        view = TradeView(self, interaction.user, user)
+
+        view = FishTradeView(self, interaction.user, user)
         await interaction.response.send_message(embed=view.build_embed(), view=view)
-        view.original_interaction = interaction
+
+    @fish_group.command(name="quests", description="Lihat misi harian & mingguan fishing")
+    async def fish_quests(self, interaction: discord.Interaction):
+        self.generate_quests(interaction.user.id)
+        
+        cursor = self.conn.cursor()
+        now = datetime.now()
+        
+        # Fetch Active Quests
+        cursor.execute('''
+            SELECT id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period, reward_type, reward_name 
+            FROM fishing_quests 
+            WHERE user_id = ? AND (expiration_date IS NULL OR expiration_date > ?)
+            ORDER BY quest_period, is_claimed, id
+        ''', (interaction.user.id, now))
+        quests = cursor.fetchall()
+        
+        if not quests:
+            await interaction.response.send_message("❌ Gagal memuat quest. Coba lagi nanti.", ephemeral=True)
+            return
+            
+        embed = discord.Embed(
+            title="📜 Fishing Quests",
+            description=f"Selesaikan misi untuk mendapatkan hadiah menarik!",
+            color=discord.Color.gold()
+        )
+        
+        view = QuestClaimView(self, interaction.user.id, quests)
+        
+        daily_text = ""
+        weekly_text = ""
+        
+        for i, (q_id, q_type, criteria, target, progress, reward, is_claimed, period, r_type, r_name) in enumerate(quests, 1):
+            # Format Quest Description
+            desc = ""
+            if q_type == "catch_any":
+                desc = f"Tangkap {target} ikan apa saja"
+            elif q_type == "catch_rarity":
+                desc = f"Tangkap {target} ikan {criteria}"
+            elif q_type == "catch_weight":
+                desc = f"Tangkap {target} ikan > {criteria}kg"
+            elif q_type == "catch_specific":
+                desc = f"Tangkap {target} {criteria}"
+            elif q_type == "total_weight":
+                desc = f"Total tangkapan {target}kg"
+            
+            # Progress Bar
+            percent = min(progress / target, 1.0)
+            bar_len = 8
+            filled = int(percent * bar_len)
+            bar = "▓" * filled + "░" * (bar_len - filled)
+            
+            status = ""
+            if is_claimed:
+                status = "✅"
+            elif progress >= target:
+                status = "🎁 **SIAP KLAIM**"
+            else:
+                status = f"{int(percent*100)}%"
+            
+            # Reward Display
+            reward_str = ""
+            if r_type == 'material':
+                icon = "🔩" if "Scrap" in r_name else "🔮"
+                reward_str = f"{icon} **{reward}x {r_name}**"
+            else:
+                reward_str = f"💰 **{reward}**"
+            
+            entry = f"`{desc}`\n{bar} ({progress}/{target}) | {reward_str} {status}\n"
+            
+            if period == 'weekly':
+                weekly_text += entry
+            else:
+                daily_text += entry
+                
+        if daily_text:
+            embed.add_field(name="# 📅 Daily Quests", value=daily_text, inline=False)
+        else:
+            embed.add_field(name="# 📅 Daily Quests", value="*Tidak ada quest aktif.*", inline=False)
+            
+        if weekly_text:
+            embed.add_field(name="# 📅 Weekly Quests", value=weekly_text, inline=False)
+        else:
+            embed.add_field(name="# 📅 Weekly Quests", value="*Tidak ada quest aktif.*", inline=False)
+            
+        await interaction.response.send_message(embed=embed, view=view)
+
+    async def claim_quest_reward(self, interaction: discord.Interaction, quest_id: int):
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT reward_amount, is_claimed, progress, target_value, reward_type, reward_name FROM fishing_quests WHERE id = ?', (quest_id,))
+        res = cursor.fetchone()
+        
+        if not res:
+            await interaction.response.send_message("❌ Quest tidak ditemukan!", ephemeral=True)
+            return
+            
+        reward, is_claimed, progress, target, r_type, r_name = res
+        
+        if is_claimed:
+            await interaction.response.send_message("❌ Quest sudah diklaim!", ephemeral=True)
+            return
+            
+        if progress < target:
+            await interaction.response.send_message("❌ Quest belum selesai!", ephemeral=True)
+            return
+            
+        # Update DB
+        cursor.execute('UPDATE fishing_quests SET is_claimed = 1 WHERE id = ?', (quest_id,))
+        self.conn.commit()
+        
+        # Add Reward
+        if r_type == 'material':
+            self.add_material(interaction.user.id, r_name, reward)
+            await interaction.response.send_message(f"🎉 **Selamat!** Kamu mendapatkan **{reward}x {r_name}**!", ephemeral=True)
+        else:
+            economy = self.get_economy()
+            if economy:
+                economy.update_balance(interaction.user.id, reward)
+                await interaction.response.send_message(f"🎉 **Selamat!** Kamu mendapatkan 💰 **{reward}** koin!", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Economy system error.", ephemeral=True)
+            
+        # Refresh UI (Optional, user can re-run command)
 
 
 
@@ -1786,6 +2109,331 @@ class FishingForgeView(discord.ui.View):
         # Refresh View
         self.update_components()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+
+
+class ConfirmSalvageView(discord.ui.View):
+    def __init__(self, salvage_view, selected_ids, total_scrap, count):
+        super().__init__(timeout=60)
+        self.salvage_view = salvage_view
+        self.selected_ids = selected_ids
+        self.total_scrap = total_scrap
+        self.count = count
+        
+    @discord.ui.button(label="✅ YA, SALVAGE SEMUA", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cursor = self.salvage_view.cog.conn.cursor()
+        
+        # Execute Deletion
+        for fid in self.selected_ids:
+             cursor.execute('DELETE FROM fish_inventory WHERE id = ?', (fid,))
+             
+        self.salvage_view.cog.conn.commit()
+        self.salvage_view.cog.add_material(interaction.user.id, "Scrap Metal", self.total_scrap)
+        
+        # Update Parent View
+        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (self.salvage_view.original_interaction.user.id,))
+        self.salvage_view.all_rows = cursor.fetchall()
+        self.salvage_view.max_pages = (len(self.salvage_view.all_rows) - 1) // self.salvage_view.items_per_page + 1
+        if self.salvage_view.page >= self.salvage_view.max_pages: self.salvage_view.page = max(0, self.salvage_view.max_pages - 1)
+        
+        self.salvage_view.update_components()
+        
+        try:
+            await self.salvage_view.original_interaction.edit_original_response(embed=self.salvage_view.build_embed(), view=self.salvage_view)
+        except:
+            pass
+            
+        await interaction.response.edit_message(content=f"✅ Berhasil men-salvage **{self.count}** ikan menjadi **{self.total_scrap}x Scrap Metal** 🔩!", view=None)
+
+    @discord.ui.button(label="❌ Batal", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="❌ Salvage dibatalkan.", view=None)
+
+
+class FishingSalvageView(discord.ui.View):
+    def __init__(self, cog, interaction, all_rows):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.original_interaction = interaction
+        self.all_rows = all_rows
+        self.page = 0
+        self.items_per_page = 24
+        self.max_pages = (len(all_rows) - 1) // self.items_per_page + 1
+        
+        self.update_components()
+
+    def update_components(self):
+        self.clear_items()
+        
+        start = self.page * self.items_per_page
+        end = start + self.items_per_page
+        current_rows = self.all_rows[start:end]
+        
+        options = []
+        for i, (fid, name, rarity, weight, price) in enumerate(current_rows, start=1):
+            visual_id = i 
+            options.append(discord.SelectOption(
+                label=f"{visual_id}. {name} ({weight}kg)",
+                description=f"Rarity: {rarity} | Price: {price}",
+                value=str(fid),
+                emoji="♻️"
+            ))
+            
+        # Add Select All Option
+        options.insert(0, discord.SelectOption(
+            label="♻️ Salvage SEMUA di Halaman Ini",
+            description="Hancurkan semua ikan di halaman ini menjadi Scrap Metal.",
+            value="select_all",
+            emoji="⚠️"
+        ))
+            
+        if options:
+            select = discord.ui.Select(
+                placeholder=f"Pilih ikan untuk di-salvage (Halaman {self.page + 1}/{self.max_pages})...",
+                min_values=1,
+                max_values=len(options),
+                options=options
+            )
+            select.callback = self.select_callback
+            self.add_item(select)
+        
+        # Navigation
+        if self.max_pages > 1:
+            prev_btn = discord.ui.Button(label="◀️ Prev", style=discord.ButtonStyle.secondary, disabled=(self.page == 0))
+            prev_btn.callback = self.prev_callback
+            self.add_item(prev_btn)
+            
+            next_btn = discord.ui.Button(label="Next ▶️", style=discord.ButtonStyle.secondary, disabled=(self.page >= self.max_pages - 1))
+            next_btn.callback = self.next_callback
+            self.add_item(next_btn)
+
+    async def send_initial_message(self):
+        embed = self.build_embed()
+        await self.original_interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+
+    def build_embed(self):
+        embed = discord.Embed(title=f"♻️ Salvage Ikan (Scrap Metal)", color=discord.Color.orange())
+        embed.description = "Pilih ikan yang ingin dihancurkan menjadi **Scrap Metal**.\n*Ikan yang di-salvage akan hilang permanen!*"
+        embed.set_footer(text=f"Halaman {self.page + 1}/{self.max_pages}")
+        return embed
+
+    async def prev_callback(self, interaction: discord.Interaction):
+        if self.page > 0:
+            self.page -= 1
+            self.update_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def next_callback(self, interaction: discord.Interaction):
+        if self.page < self.max_pages - 1:
+            self.page += 1
+            self.update_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        selected_ids = interaction.data["values"]
+        cursor = self.cog.conn.cursor()
+        
+        # Handle Select All
+        if "select_all" in selected_ids:
+            start = self.page * self.items_per_page
+            end = start + self.items_per_page
+            current_rows = self.all_rows[start:end]
+            selected_ids = [str(row[0]) for row in current_rows]
+            
+            # Calculate potential scrap
+            temp_scrap = 0
+            for _ in selected_ids:
+                temp_scrap += random.randint(1, 3) # Estimate (or pre-roll)
+                
+            # Show Confirmation
+            confirm_view = ConfirmSalvageView(self, selected_ids, temp_scrap, len(selected_ids))
+            await interaction.response.send_message(
+                f"⚠️ **PERINGATAN!**\nKamu akan menghancurkan **{len(selected_ids)}** ikan di halaman ini menjadi estimasi **{temp_scrap}x Scrap Metal**.\nIkan yang sudah di-salvage **TIDAK BISA** dikembalikan!",
+                view=confirm_view,
+                ephemeral=True
+            )
+            return
+
+        total_scrap = 0
+        deleted_count = 0
+        
+        for fid in selected_ids:
+            # Get fish details to verify ownership (paranoid check)
+            cursor.execute('SELECT id FROM fish_inventory WHERE id = ? AND user_id = ?', (fid, self.original_interaction.user.id))
+            if cursor.fetchone():
+                # Delete fish
+                cursor.execute('DELETE FROM fish_inventory WHERE id = ?', (fid,))
+                
+                # Calculate Scrap (Random 1-3)
+                scrap = random.randint(1, 3)
+                total_scrap += scrap
+                deleted_count += 1
+        
+        self.cog.conn.commit()
+        self.cog.add_material(self.original_interaction.user.id, "Scrap Metal", total_scrap)
+        
+        await interaction.response.send_message(f"✅ Berhasil men-salvage **{deleted_count}** ikan menjadi **{total_scrap}x Scrap Metal** 🔩!", ephemeral=True)
+        
+        # Refresh data
+        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (self.original_interaction.user.id,))
+        self.all_rows = cursor.fetchall()
+        self.max_pages = (len(self.all_rows) - 1) // self.items_per_page + 1
+        if self.page >= self.max_pages: self.page = max(0, self.max_pages - 1)
+        
+        self.update_components()
+        # Edit original message to reflect changes
+        try:
+            await self.original_interaction.edit_original_response(embed=self.build_embed(), view=self)
+        except:
+            pass
+
+class FishingForgeView(discord.ui.View):
+    def __init__(self, cog, interaction, owned_rods):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.original_interaction = interaction
+        self.owned_rods = owned_rods
+        self.selected_rod = None
+        
+        self.update_components()
+
+    def update_components(self):
+        self.clear_items()
+        
+        # Select Rod
+        options = []
+        for rod in self.owned_rods:
+            level = self.cog.get_rod_level(self.original_interaction.user.id, rod)
+            options.append(discord.SelectOption(
+                label=f"{rod} (+{level})",
+                value=rod,
+                emoji="🎣"
+            ))
+            
+        select = discord.ui.Select(
+            placeholder="Pilih pancingan untuk ditempa...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+        select.callback = self.select_rod_callback
+        self.add_item(select)
+        
+        # Forge Button (Only if rod selected)
+        if self.selected_rod:
+            btn = discord.ui.Button(label="🔨 Tempa (Forge)", style=discord.ButtonStyle.danger)
+            btn.callback = self.forge_callback
+            self.add_item(btn)
+
+    async def send_initial_message(self):
+        user_scrap = self.cog.get_material(self.original_interaction.user.id, "Scrap Metal")
+        user_pearl = self.cog.get_material(self.original_interaction.user.id, "Magic Pearl")
+        
+        embed = discord.Embed(title="⚒️ Forge (Tempa Pancingan)", description="Pilih pancingan di bawah untuk melihat biaya upgrade.", color=discord.Color.dark_red())
+        embed.add_field(name="Material Kamu", value=f"🔩 Scrap Metal: **{user_scrap}**\n🔮 Magic Pearl: **{user_pearl}**", inline=False)
+        await self.original_interaction.response.send_message(embed=embed, view=self)
+
+    async def select_rod_callback(self, interaction: discord.Interaction):
+        self.selected_rod = interaction.data["values"][0]
+        self.update_components()
+        
+        # Calculate Cost
+        level = self.cog.get_rod_level(interaction.user.id, self.selected_rod)
+        next_level = level + 1
+        
+        # Cost Formula
+        cost_scrap = next_level * 5 + 5
+        cost_pearl = 0
+        if next_level >= 5:
+            cost_pearl = (next_level - 4) * 1
+            
+        embed = discord.Embed(title=f"⚒️ Forge: {self.selected_rod} (+{level} ➡️ +{next_level})", color=discord.Color.dark_red())
+        embed.add_field(name="Biaya", value=f"🔩 Scrap Metal: **{cost_scrap}**\n🔮 Magic Pearl: **{cost_pearl}**", inline=False)
+        
+        # Check User Materials
+        user_scrap = self.cog.get_material(interaction.user.id, "Scrap Metal")
+        user_pearl = self.cog.get_material(interaction.user.id, "Magic Pearl")
+        
+        embed.add_field(name="Material Kamu", value=f"🔩 {user_scrap}\n🔮 {user_pearl}", inline=False)
+        
+        if user_scrap >= cost_scrap and user_pearl >= cost_pearl:
+            embed.set_footer(text="Material cukup! Klik tombol Tempa.")
+        else:
+            embed.set_footer(text="Material tidak cukup!")
+            
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def forge_callback(self, interaction: discord.Interaction):
+        if not self.selected_rod: return
+        
+        level = self.cog.get_rod_level(interaction.user.id, self.selected_rod)
+        next_level = level + 1
+        
+        cost_scrap = next_level * 5 + 5
+        cost_pearl = 0
+        if next_level >= 5:
+            cost_pearl = (next_level - 4) * 1
+            
+        user_scrap = self.cog.get_material(interaction.user.id, "Scrap Metal")
+        user_pearl = self.cog.get_material(interaction.user.id, "Magic Pearl")
+        
+        if user_scrap < cost_scrap or user_pearl < cost_pearl:
+            await interaction.response.send_message("❌ Material tidak cukup!", ephemeral=True)
+            return
+            
+        # Deduct Materials
+        self.cog.add_material(interaction.user.id, "Scrap Metal", -cost_scrap)
+        self.cog.add_material(interaction.user.id, "Magic Pearl", -cost_pearl)
+        
+        # Upgrade Rod
+        self.cog.update_rod_level(interaction.user.id, self.selected_rod, next_level)
+        
+        await interaction.response.send_message(f"🎉 **SUKSES!** {self.selected_rod} berhasil ditempa ke level **+{next_level}**!", ephemeral=True)
+        
+        # Refresh
+        await self.select_rod_callback(interaction)
+
+
+class QuestClaimView(discord.ui.View):
+    def __init__(self, cog, user_id, quests):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.user_id = user_id
+        
+        # Limit buttons to 5 per row, max 25. 
+        # We have 3 daily + 2 weekly = 5 buttons max usually.
+        for i, row in enumerate(quests, 1):
+            # Handle variable unpacking safely (some rows might have extra cols if query changed)
+            # Query: id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period
+            q_id = row[0]
+            target = row[3]
+            progress = row[4]
+            is_claimed = row[6]
+            
+            disabled = True
+            label = f"Claim Q{i}"
+            style = discord.ButtonStyle.secondary
+            
+            if not is_claimed and progress >= target:
+                disabled = False
+                style = discord.ButtonStyle.success
+                label = f"💰 Claim Q{i}"
+            elif is_claimed:
+                label = f"✅ Done Q{i}"
+            
+            button = discord.ui.Button(label=label, style=style, disabled=disabled, custom_id=f"claim_q_{q_id}")
+            button.callback = self.create_callback(q_id)
+            self.add_item(button)
+
+    def create_callback(self, quest_id):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.user_id:
+                await interaction.response.send_message("❌ Ini bukan quest kamu!", ephemeral=True)
+                return
+            await self.cog.claim_quest_reward(interaction, quest_id)
+        return callback
+
 
 async def setup(bot):
     await bot.add_cog(Fishing(bot))

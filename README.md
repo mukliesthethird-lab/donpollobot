@@ -154,3 +154,30 @@ This project is open-source.
     - **Lazy Loading**: Songs are now resolved instantly, preventing timeouts when adding large playlists.
     - **Smart Duration**: Fixed "LIVE" duration bug for Spotify tracks by implementing a smart fallback fetch.
     - **Stability**: Improved error handling to skip deleted/unavailable videos automatically.
+
+- **Fishing Quests & UI Update (Dec 5, 2025)**:
+  - **Quest System Overhaul**:
+    - **Daily Quests**: 5 quests per day, resetting at midnight. Rewards: Coins 💰 & Scrap Metal 🔩.
+    - **Weekly Quests**: 3 hard quests per week, resetting every Friday. Rewards: High Coins 💰 & Magic Pearl 🔮.
+    - **New UI**: Quest progress bars and clearer formatting.
+
+    **Daily Quest Variations (15 Types)**
+    | Type | Target | Reward |
+    | :--- | :--- | :--- |
+    | **Catch Any** | 10-20 fish | Coins |
+    | **Catch Rarity** | Common, Uncommon, Rare | Coins |
+    | **Catch Weight** | >1kg, >2kg, >5kg | Coins |
+    | **Total Weight** | 20-50kg | Coins |
+    | **Specific Fish** | Mas, Lele, Nila, Gurame, Patin, Bawal | **Scrap Metal** |
+
+    **Weekly Quest Variations (10 Types)**
+    | Type | Target | Reward |
+    | :--- | :--- | :--- |
+    | **Catch Rarity** | Legendary, Epic, Rare | **Magic Pearl** |
+    | **Total Weight** | 300-800kg | Coins |
+    | **Catch Weight** | >10kg, >50kg, >100kg | **Magic Pearl** |
+    | **Catch Any** | 300 fish | Coins |
+
+  - **UI Enhancements**:
+    - **Salvage**: Added **"Select All"** option with a safety confirmation dialog.
+    - **Forge**: Now displays your current material balance (Scrap/Pearl) directly in the menu.
