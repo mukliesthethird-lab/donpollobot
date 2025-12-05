@@ -87,19 +87,19 @@ class Fishing(commands.Cog):
         ],
 
         "Legendary": [
-            {"name": "Mekong Giant Catfish", "base_price": 2000, "min_weight": 50.0, "max_weight": 300.0, "spawn_weight": 2, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445380001485689003/Mekong_Giant_Catfish.png?ex=69302286&is=692ed106&hm=359ccd5f2260a00f641dd5cdc53fe9ffc6f704fe349eaf4dea3848fb4cd3eb38&=&format=webp&quality=lossless"},
-            {"name": "Arapaima Gigas", "base_price": 2500, "min_weight": 40.0, "max_weight": 200.0, "spawn_weight": 2, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445380240296902757/Arapaima_Gigas.png?ex=693022bf&is=692ed13f&hm=5a5de57bed01ee90e85a3127919f26c081c1c1694a8b2ac1a41c2e176b83d221&=&format=webp&quality=lossless"},
-            {"name": "Blue Marlin", "base_price": 6500, "min_weight": 80.0, "max_weight": 300.0, "spawn_weight": 3, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445380445851226248/Blue_Marlin.png?ex=693022f0&is=692ed170&hm=aa1f4ca83e124fa62bd2e585f184d45b89561c9d34a0b4d824adc66ae93eb44c&=&format=webp&quality=lossless"},
+            {"name": "Mekong Giant Catfish", "base_price": 6000, "min_weight": 50.0, "max_weight": 300.0, "spawn_weight": 2, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445380001485689003/Mekong_Giant_Catfish.png?ex=69302286&is=692ed106&hm=359ccd5f2260a00f641dd5cdc53fe9ffc6f704fe349eaf4dea3848fb4cd3eb38&=&format=webp&quality=lossless"},
+            {"name": "Arapaima Gigas", "base_price": 9000, "min_weight": 40.0, "max_weight": 200.0, "spawn_weight": 2, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445380240296902757/Arapaima_Gigas.png?ex=693022bf&is=692ed13f&hm=5a5de57bed01ee90e85a3127919f26c081c1c1694a8b2ac1a41c2e176b83d221&=&format=webp&quality=lossless"},
+            {"name": "Blue Marlin", "base_price": 13000, "min_weight": 80.0, "max_weight": 300.0, "spawn_weight": 3, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445380445851226248/Blue_Marlin.png?ex=693022f0&is=692ed170&hm=aa1f4ca83e124fa62bd2e585f184d45b89561c9d34a0b4d824adc66ae93eb44c&=&format=webp&quality=lossless"},
             {"name": "Mola Mola", "base_price": 1500, "min_weight": 200.0, "max_weight": 1000.0, "spawn_weight": 3, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445380656367403100/Mola_Mola.png?ex=69302322&is=692ed1a2&hm=5123ec5a8a53d97dffcce7711c74d9ad6f59eb888776b820af5d72fcc4ec6a0e&=&format=webp&quality=lossless"},
-            {"name": "Napoleon", "base_price": 8500, "min_weight": 5.0, "max_weight": 25.0, "spawn_weight": 3, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445380883803668551/ikan_Napoleon.png?ex=69302358&is=692ed1d8&hm=f3e400c46a8e6649d47b6cb188a87bf0a17df93db11a8431176e3c8d5903e512&=&format=webp&quality=lossless"},
-            {"name": "Oarfish", "base_price": 8500, "min_weight": 20.0, "max_weight": 150.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445381209411813396/Oarfish.png?ex=693023a6&is=692ed226&hm=cf155612ffba44e5c18a08af0c9684cd7972623baf439ca303ac2fea6c6418c6&=&format=webp&quality=lossless"},
-            {"name": "Alligator Gar", "base_price": 2200, "min_weight": 10.0, "max_weight": 50.0, "spawn_weight": 2, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445381420200759498/Alligator_Gar.png?ex=693023d8&is=692ed258&hm=01d50aeedf38e8b599356993abec64b2540022fc84761bdd3120b091693b8173&=&format=webp&quality=lossless"},
-            {"name": "Manta Ray", "base_price": 9500, "min_weight": 100.0, "max_weight": 500.0, "spawn_weight": 2, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445381657325604975/Giant_Stingray.png?ex=69302410&is=692ed290&hm=9e678e8be34f391bd7f287f7c38b9f3d26dc640e6b54c49395aca657a2f473a4&=&format=webp&quality=lossless"},
-            {"name": "Giant Stingray", "base_price": 9000, "min_weight": 50.0, "max_weight": 300.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445381894790184991/Giant_Stingray.png?ex=69302449&is=692ed2c9&hm=e03c066f7ee0794cb4ce9f210c6ba04a0b71971eca7a5a21b37d8a6f2d0f9b0e&=&format=webp&quality=lossless"},
-            {"name": "Hiu Martil", "base_price": 11000, "min_weight": 80.0, "max_weight": 300.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445382128668770324/Hiu_Martil.png?ex=69302481&is=692ed301&hm=d5b901ca9493960a0dffba7d282e089046d0e8edc2a366508b0758bc91611180&=&format=webp&quality=lossless"},
-            {"name": "Hiu Macan", "base_price": 10000, "min_weight": 100.0, "max_weight": 500.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445382414535884800/Hiu_Macan.png?ex=693024c5&is=692ed345&hm=71b89df8360057baca485c4090e0d5cb09bd5f0777657cfa8770423f0399c35f&=&format=webp&quality=lossless"},
-            {"name": "Megalodon", "base_price": 15000, "min_weight": 8000.0, "max_weight": 30000.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445383272518651934/Megalodon.png?ex=69302592&is=692ed412&hm=bd3516d61f8352de5a84bf569adb7eeaaa586eb2d0653d635e87f055b517af49&=&format=webp&quality=lossless"},
-            {"name": "Hiu Putih", "base_price": 12500, "min_weight": 100.0, "max_weight": 300.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445382645256294542/Great_White_Shark.png?ex=693024fc&is=692ed37c&hm=37fde9523241707a835e49b968fe72271807746ced52f20b1cc1658944a82d89&=&format=webp&quality=lossless"},
+            {"name": "Napoleon", "base_price": 10000, "min_weight": 5.0, "max_weight": 25.0, "spawn_weight": 3, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445380883803668551/ikan_Napoleon.png?ex=69302358&is=692ed1d8&hm=f3e400c46a8e6649d47b6cb188a87bf0a17df93db11a8431176e3c8d5903e512&=&format=webp&quality=lossless"},
+            {"name": "Oarfish", "base_price": 12500, "min_weight": 20.0, "max_weight": 150.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445381209411813396/Oarfish.png?ex=693023a6&is=692ed226&hm=cf155612ffba44e5c18a08af0c9684cd7972623baf439ca303ac2fea6c6418c6&=&format=webp&quality=lossless"},
+            {"name": "Alligator Gar", "base_price": 5500, "min_weight": 10.0, "max_weight": 50.0, "spawn_weight": 2, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445381420200759498/Alligator_Gar.png?ex=693023d8&is=692ed258&hm=01d50aeedf38e8b599356993abec64b2540022fc84761bdd3120b091693b8173&=&format=webp&quality=lossless"},
+            {"name": "Manta Ray", "base_price": 14500, "min_weight": 100.0, "max_weight": 500.0, "spawn_weight": 2, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445381657325604975/Giant_Stingray.png?ex=69302410&is=692ed290&hm=9e678e8be34f391bd7f287f7c38b9f3d26dc640e6b54c49395aca657a2f473a4&=&format=webp&quality=lossless"},
+            {"name": "Giant Stingray", "base_price": 13000, "min_weight": 50.0, "max_weight": 300.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445381894790184991/Giant_Stingray.png?ex=69302449&is=692ed2c9&hm=e03c066f7ee0794cb4ce9f210c6ba04a0b71971eca7a5a21b37d8a6f2d0f9b0e&=&format=webp&quality=lossless"},
+            {"name": "Hiu Martil", "base_price": 14500, "min_weight": 80.0, "max_weight": 300.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445382128668770324/Hiu_Martil.png?ex=69302481&is=692ed301&hm=d5b901ca9493960a0dffba7d282e089046d0e8edc2a366508b0758bc91611180&=&format=webp&quality=lossless"},
+            {"name": "Hiu Macan", "base_price": 14000, "min_weight": 100.0, "max_weight": 500.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445382414535884800/Hiu_Macan.png?ex=693024c5&is=692ed345&hm=71b89df8360057baca485c4090e0d5cb09bd5f0777657cfa8770423f0399c35f&=&format=webp&quality=lossless"},
+            {"name": "Megalodon", "base_price": 20000, "min_weight": 8000.0, "max_weight": 30000.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445383272518651934/Megalodon.png?ex=69302592&is=692ed412&hm=bd3516d61f8352de5a84bf569adb7eeaaa586eb2d0653d635e87f055b517af49&=&format=webp&quality=lossless"},
+            {"name": "Hiu Putih", "base_price": 15000, "min_weight": 100.0, "max_weight": 300.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445382645256294542/Great_White_Shark.png?ex=693024fc&is=692ed37c&hm=37fde9523241707a835e49b968fe72271807746ced52f20b1cc1658944a82d89&=&format=webp&quality=lossless"},
             {"name": "Gurita", "base_price": 4500, "min_weight": 1.0, "max_weight": 300.0, "spawn_weight": 1, "image_url": "https://media.discordapp.net/attachments/1080697175291469936/1445382907152695348/Gurita.png?ex=6930253a&is=692ed3ba&hm=edbaf2cdc6a5391b367c82f32c56063d80550a85c5175a07ed9f66518b59d6c2&=&format=webp&quality=lossless"}
         ],
 }
@@ -853,9 +853,18 @@ class Fishing(commands.Cog):
 
     @fish_group.command(name="forge", description="Upgrade your fishing rod (Tempa)")
     async def forge(self, interaction: discord.Interaction):
-        owned_rods = self.get_owned_rods(interaction.user.id)
-        view = FishingForgeView(self, interaction, owned_rods)
-        await view.send_initial_message()
+        await interaction.response.defer(ephemeral=True)
+        try:
+            owned_rods = self.get_owned_rods(interaction.user.id)
+            if not owned_rods:
+                await interaction.followup.send("❌ Kamu belum memiliki pancingan!", ephemeral=True)
+                return
+                
+            view = FishingForgeView(self, interaction, owned_rods)
+            await view.send_initial_message()
+        except Exception as e:
+            print(f"[ERROR] /fish forge: {e}")
+            await interaction.followup.send(f"❌ Terjadi kesalahan: {e}", ephemeral=True)
 
 
 
@@ -1000,7 +1009,7 @@ class FishingInventoryView(discord.ui.View):
         ]
         
         bulk_select = discord.ui.Select(
-            placeholder="Opsi Jual Massal (Bulk Actions)...",
+            placeholder="Opsi Jual Rarity ...",
             min_values=1,
             max_values=1,
             options=bulk_options,
@@ -1529,6 +1538,15 @@ class FishShopView(discord.ui.View):
             emoji="🍀",
             default=False
         ))
+
+        # Add Magic Pearl
+        options.append(discord.SelectOption(
+            label="Magic Pearl - 💰250,000",
+            description="Used for forging rods (Required for high levels)",
+            value="Magic Pearl",
+            emoji="🔮",
+            default=False
+        ))
             
         select = discord.ui.Select(placeholder="Buy a fishing rod or item...", options=options)
         select.callback = self.callback
@@ -1558,6 +1576,14 @@ class FishShopView(discord.ui.View):
             value=f"**Price:** 💰 100,000\n**Effect:** +50% Forge Success Rate\n**Owned:** {user_charm}",
             inline=False
         )
+        
+        # Add Magic Pearl Info
+        user_pearl = self.cog.get_material(self.user.id, "Magic Pearl")
+        embed.add_field(
+            name="🔮 Magic Pearl",
+            value=f"**Price:** 💰 250,000\n**Effect:** Essential material for forging\n**Owned:** {user_pearl}",
+            inline=False
+        )
         return embed
 
     async def callback(self, interaction: discord.Interaction):
@@ -1584,6 +1610,27 @@ class FishShopView(discord.ui.View):
             self.cog.add_material(self.user.id, "Lucky Charm", 1)
             
             await interaction.response.send_message(f"🎉 Successfully bought **1x Lucky Charm** 🍀!", ephemeral=True)
+            self.update_components()
+            await interaction.message.edit(embed=self.build_embed(), view=self)
+            return
+
+        # Handle Magic Pearl Purchase
+        if rod_name == "Magic Pearl":
+            price = 250000
+            economy = self.cog.get_economy()
+            if not economy:
+                await interaction.response.send_message("❌ Economy system error.", ephemeral=True)
+                return
+                
+            bal = economy.get_balance(self.user.id)
+            if bal < price:
+                await interaction.response.send_message(f"❌ Not enough money! You need **{price:,}** coins.", ephemeral=True)
+                return
+                
+            economy.update_balance(self.user.id, -price)
+            self.cog.add_material(self.user.id, "Magic Pearl", 1)
+            
+            await interaction.response.send_message(f"🎉 Successfully bought **1x Magic Pearl** 🔮!", ephemeral=True)
             self.update_components()
             await interaction.message.edit(embed=self.build_embed(), view=self)
             return
@@ -1746,6 +1793,19 @@ class FishLeaderboardView(discord.ui.View):
         
         self.update_components()
 
+class FishingForgeView(discord.ui.View):
+    def __init__(self, cog, interaction, owned_rods):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.original_interaction = interaction
+        self.owned_rods = owned_rods
+        self.selected_rod = None
+        self.use_lucky_charm = False
+        self.last_result = None # Store result message
+        self.last_status = None # Store result status (success/failure) for color
+        
+        self.update_components()
+
     def update_components(self):
         self.clear_items()
         
@@ -1753,7 +1813,10 @@ class FishLeaderboardView(discord.ui.View):
         options = []
         for rod_name in self.owned_rods:
             level = self.cog.get_rod_level(self.original_interaction.user.id, rod_name)
-            emoji = self.cog.rod_data[rod_name]["emoji"]
+            
+            # Safe access to rod data
+            rod_data = self.cog.rod_data.get(rod_name, {})
+            emoji = rod_data.get("emoji", "🎣")
             
             label = f"{rod_name} +{level}"
             if level >= 10:
@@ -1798,7 +1861,7 @@ class FishLeaderboardView(discord.ui.View):
 
     async def send_initial_message(self):
         embed = discord.Embed(title="⚒️ Blacksmith Forge", description="Pilih pancingan yang ingin kamu upgrade.", color=discord.Color.dark_grey())
-        await self.original_interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+        await self.original_interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def select_callback(self, interaction: discord.Interaction):
         self.selected_rod = interaction.data["values"][0]
@@ -1976,6 +2039,10 @@ class FishLeaderboardView(discord.ui.View):
                 self.last_result = f"💀 **GAGAL!** {result_text}"
                 self.last_status = "failure"
                 
+            # Reset Lucky Charm usage
+            if self.use_lucky_charm:
+                self.use_lucky_charm = False
+                
             # Refresh View
             self.update_components()
             await interaction.response.edit_message(embed=self.build_embed(), view=self)
@@ -1983,7 +2050,7 @@ class FishLeaderboardView(discord.ui.View):
         except Exception as e:
             print(f"[ERROR] Forge Callback: {e}")
             try:
-                await interaction.response.send_message(f"❌ Terjadi kesalahan: {e}", ephemeral=True)
+                await interaction.followup.send(f"❌ Terjadi kesalahan: {e}", ephemeral=True)
             except:
                 pass
 
@@ -2091,7 +2158,7 @@ class FishingSalvageView(discord.ui.View):
         ]
         
         bulk_select = discord.ui.Select(
-            placeholder="Opsi Salvage Massal (Bulk Actions)...",
+            placeholder="Opsi Salvage Rarity ...",
             min_values=1,
             max_values=1,
             options=bulk_options,
