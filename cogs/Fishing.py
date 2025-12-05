@@ -2060,6 +2060,26 @@ class FishingSalvageView(discord.ui.View):
             )
             select.callback = self.select_callback
             self.add_item(select)
+            
+        # 2. Bulk Action Select Menu
+        bulk_options = [
+            discord.SelectOption(label="♻️ Salvage SEMUA (Salvage All)", value="salvage_all", description="Hancurkan semua ikan di inventory.", emoji="⚠️"),
+            discord.SelectOption(label="⚪ Salvage Common", value="salvage_Common", description="Hancurkan semua ikan Common.", emoji="🔩"),
+            discord.SelectOption(label="🟢 Salvage Uncommon", value="salvage_Uncommon", description="Hancurkan semua ikan Uncommon.", emoji="🔩"),
+            discord.SelectOption(label="🔵 Salvage Rare", value="salvage_Rare", description="Hancurkan semua ikan Rare.", emoji="🔩"),
+            discord.SelectOption(label="🟣 Salvage Epic", value="salvage_Epic", description="Hancurkan semua ikan Epic.", emoji="🔩"),
+            discord.SelectOption(label="🟡 Salvage Legendary", value="salvage_Legendary", description="Hancurkan semua ikan Legendary.", emoji="🔩"),
+        ]
+        
+        bulk_select = discord.ui.Select(
+            placeholder="Opsi Salvage Massal (Bulk Actions)...",
+            min_values=1,
+            max_values=1,
+            options=bulk_options,
+            row=1
+        )
+        bulk_select.callback = self.bulk_action_callback
+        self.add_item(bulk_select)
         
         # Navigation
         if self.max_pages > 1:
@@ -2150,6 +2170,57 @@ class FishingSalvageView(discord.ui.View):
             await self.original_interaction.edit_original_response(embed=self.build_embed(), view=self)
         except:
             pass
+
+    async def bulk_action_callback(self, interaction: discord.Interaction):
+        action = interaction.data["values"][0]
+        
+        if action == "salvage_all":
+            await self.salvage_all_callback(interaction)
+            return
+            
+        if action.startswith("salvage_"):
+            rarity = action.split("_")[1]
+            
+            # Calculate total scrap for this rarity
+            total_scrap = 0
+            count = 0
+            for row in self.all_rows:
+                if row[2] == rarity:
+                    r_scrap = 1
+                    if rarity == "Uncommon": r_scrap = 2
+                    elif rarity == "Rare": r_scrap = 5
+                    elif rarity == "Epic": r_scrap = 10
+                    elif rarity == "Legendary": r_scrap = 20
+                    total_scrap += r_scrap
+                    count += 1
+            
+            if count == 0:
+                await interaction.response.send_message(f"❌ Tidak ada ikan **{rarity}** di inventory!", ephemeral=True)
+                return
+                
+            confirm_view = ConfirmSalvageView(self, [], total_scrap, count, rarity)
+            await interaction.response.send_message(f"⚠️ Yakin ingin men-salvage **SEMUA {rarity}** ({count} ikan) menjadi **{total_scrap}x Scrap Metal**?", view=confirm_view, ephemeral=True)
+
+    async def salvage_all_callback(self, interaction: discord.Interaction):
+        total_scrap = 0
+        count = len(self.all_rows)
+        
+        for row in self.all_rows:
+            rarity = row[2]
+            scrap = 1
+            if rarity == "Uncommon": scrap = 2
+            elif rarity == "Rare": scrap = 5
+            elif rarity == "Epic": scrap = 10
+            elif rarity == "Legendary": scrap = 20
+            total_scrap += scrap
+            
+        if count == 0:
+            await interaction.response.send_message("❌ Inventory kamu kosong!", ephemeral=True)
+            return
+            
+        # Confirm Dialog
+        confirm_view = ConfirmSalvageView(self, [], total_scrap, count)
+        await interaction.response.send_message(f"⚠️ Yakin ingin men-salvage **SEMUA** ({count} ikan) menjadi **{total_scrap}x Scrap Metal**?", view=confirm_view, ephemeral=True)
 
 
 
