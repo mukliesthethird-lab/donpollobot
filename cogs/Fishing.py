@@ -345,12 +345,24 @@ class Fishing(commands.Cog):
         if not conn: return
         
         try:
-            cursor = conn.cursor()
+            cursor = conn.cursor(buffered=True) # Use buffered cursor to avoid Unread result found
             now = datetime.now()
-            today_str = now.strftime('%Y-%m-%d')
             
-            # --- DAILY QUESTS (5 per day) ---
-            cursor.execute('SELECT id FROM fishing_quests WHERE user_id = %s AND quest_period = %s AND created_at = %s', (user_id, 'daily', today_str))
+            # --- DAILY QUESTS (Reset at 12:00 PM) ---
+            # If current time < 12:00 PM, today's quest day is effectively "yesterday" (or we haven't reached new day yet)
+            # Logic: Calculate the expected "current daily reset time".
+            # If now is 11:00 AM, the last reset was yesterday 12:00 PM.
+            # If now is 1:00 PM, the last reset was today 12:00 PM.
+            
+            today_reset = now.replace(hour=12, minute=0, second=0, microsecond=0)
+            if now < today_reset:
+                current_daily_start = today_reset - timedelta(days=1)
+            else:
+                current_daily_start = today_reset
+                
+            daily_key = current_daily_start.strftime('%Y-%m-%d')
+            
+            cursor.execute('SELECT id FROM fishing_quests WHERE user_id = %s AND quest_period = %s AND created_at = %s', (user_id, 'daily', daily_key))
             if not cursor.fetchone():
                 daily_templates = [
                     {"type": "catch_any", "criteria": "any", "min": 10, "max": 20, "reward_mult": 20},
@@ -371,7 +383,8 @@ class Fishing(commands.Cog):
                 ]
                 
                 selected_daily = random.sample(daily_templates, 5)
-                expiry_daily = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                # Expire at next reset
+                expiry_daily = current_daily_start + timedelta(days=1)
                 
                 for quest in selected_daily:
                     target_val = random.randint(quest["min"], quest["max"])
@@ -391,11 +404,16 @@ class Fishing(commands.Cog):
                     cursor.execute('''
                         INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s, 'daily', %s)
-                    ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, today_str, expiry_daily))
+                    ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, daily_key, expiry_daily))
+                    conn.commit() # Commit per batch or per insert
 
-            # --- WEEKLY QUESTS (3 per week, reset Friday) ---
-            days_since_friday = (now.weekday() - 4) % 7
-            start_of_week = (now - timedelta(days=days_since_friday)).strftime('%Y-%m-%d')
+            # --- WEEKLY QUESTS (Reset Saturday) ---
+            # Python weekday: Mon=0, Tue=1, ..., Fri=4, Sat=5, Sun=6
+            # We want Saturday as the start of the week.
+            # Calculate days since last Saturday.
+            days_since_saturday = (now.weekday() - 5) % 7
+            start_of_week_date = (now - timedelta(days=days_since_saturday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            start_of_week = start_of_week_date.strftime('%Y-%m-%d')
             
             cursor.execute('SELECT id FROM fishing_quests WHERE user_id = %s AND quest_period = %s AND created_at = %s', (user_id, 'weekly', start_of_week))
             if not cursor.fetchone():
@@ -413,30 +431,33 @@ class Fishing(commands.Cog):
                 ]
                 
                 selected_weekly = random.sample(weekly_templates, 3)
-                expiry_weekly = (now + timedelta(days=(7 - days_since_friday))).replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                # Expire at next Saturday
+                expiry_weekly = start_of_week_date + timedelta(days=7)
                 
                 for quest in selected_weekly:
                     target_val = random.randint(quest["min"], quest["max"])
                     
-                    # Reward Logic (60% Coin, 40% Magic Pearl)
                     reward_type = 'coin'
                     reward_name = None
                     reward_amount = 0
                     
-                    if random.random() < 0.40:
+                    if random.random() < 0.40: # Higher chance for material in weekly
                         reward_type = 'material'
-                        reward_name = 'Magic Pearl'
-                        reward_amount = random.randint(1, 3)
+                        reward_name = 'Scrap Metal'
+                        reward_amount = random.randint(5, 15)
+                        if random.random() < 0.10: # Chance for Pearl
+                            reward_name = "Magic Pearl"
+                            reward_amount = 1
                     else:
-                        base_reward = target_val * quest["reward_mult"]
-                        reward_amount = min(base_reward + random.randint(1000, 3000), 15000) 
-                    
+                        reward_amount = target_val * quest["reward_mult"] + random.randint(500, 2000)
+                        
                     cursor.execute('''
                         INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s, 'weekly', %s)
                     ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, start_of_week, expiry_weekly))
-            
-            conn.commit()
+                    conn.commit()
+
         except Exception as e:
             print(f"Error generating quests: {e}")
         finally:
