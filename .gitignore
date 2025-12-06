@@ -41,3 +41,8 @@ env/
 
 # Logs
 *.log
+*.rar
+
+# Allow dashboard lib
+!dashboard/lib/
+!dashboard/src/lib/

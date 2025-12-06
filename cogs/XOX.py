@@ -282,5 +282,9 @@ class XOX(commands.Cog):
             else:
                  await interaction.response.send_message("❌ Langkah tidak valid!", ephemeral=True)
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print('✅ XOX Cog is ready')
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(XOX(bot))
