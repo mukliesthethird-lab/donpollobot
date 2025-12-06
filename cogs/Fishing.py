@@ -1203,12 +1203,12 @@ class Fishing(commands.Cog):
 
     @fish_group.command(name="quests", description="Lihat misi harian & mingguan fishing")
     async def fish_quests(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        # User requested "instant" response, no defer.
         self.generate_quests(interaction.user.id)
         
         conn = self.get_conn()
         if not conn:
-             await interaction.followup.send("❌ Database Error", ephemeral=True)
+             await interaction.response.send_message("❌ Database Error", ephemeral=True)
              return
         
         try:
@@ -1277,7 +1277,7 @@ class Fishing(commands.Cog):
             else:
                 embed.add_field(name="```📅 Weekly Quests```", value="*Tidak ada quest aktif.*", inline=False)
                 
-            await interaction.followup.send(embed=embed, view=view)
+            await interaction.response.send_message(embed=embed, view=view)
         finally:
              if conn.is_connected():
                 cursor.close()
