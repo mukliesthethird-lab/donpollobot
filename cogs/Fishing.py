@@ -1206,19 +1206,25 @@ class Fishing(commands.Cog):
 
     @fish_group.command(name="quests", description="Lihat misi harian & mingguan fishing")
     async def fish_quests(self, interaction: discord.Interaction):
+        print(f"[DEBUG] /fish quests invoked by {interaction.user.id}")
         # 1. Immediate "Instant" Response (Custom Loading State)
-        # This prevents "The application did not respond" and avoids "Bot is thinking..."
         loading_embed = discord.Embed(
             description="🔄 *Sedang mengambil data quest...*", 
             color=discord.Color.light_grey()
         )
         await interaction.response.send_message(embed=loading_embed)
+        print(f"[DEBUG] Loading embed sent")
         
         # 2. Process Logic
-        self.generate_quests(interaction.user.id)
+        try:
+            self.generate_quests(interaction.user.id)
+            print(f"[DEBUG] generate_quests completed")
+        except Exception as e:
+            print(f"[ERROR] generate_quests crashed: {e}")
         
         conn = self.get_conn()
         if not conn:
+             print("[ERROR] Failed to get conn in fish_quests")
              await interaction.edit_original_response(content="❌ Database Error", embed=None)
              return
         
@@ -1226,6 +1232,7 @@ class Fishing(commands.Cog):
             cursor = conn.cursor()
             now = datetime.now()
             
+            print(f"[DEBUG] Fetching quests from DB...")
             # Fetch Active Quests
             cursor.execute('''
                 SELECT id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period, reward_type, reward_name
@@ -1239,6 +1246,7 @@ class Fishing(commands.Cog):
             ''', (interaction.user.id, now.strftime('%Y-%m-%d'), (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d')))
             
             quests = cursor.fetchall()
+            print(f"[DEBUG] Quests fetched: {len(quests)}")
             
             embed = discord.Embed(title="📜 Fishing Quests", color=discord.Color.blue())
             
@@ -1289,7 +1297,11 @@ class Fishing(commands.Cog):
                 embed.add_field(name="```📅 Weekly Quests```", value="*Tidak ada quest aktif.*", inline=False)
             
             # 3. Edit the loading message with final result
+            print(f"[DEBUG] Editing original response...")
             await interaction.edit_original_response(embed=embed, view=view)
+            print(f"[DEBUG] Edit success!")
+        except Exception as e:
+            print(f"[ERROR] Logic error in fish_quests: {e}")
         finally:
              if conn.is_connected():
                 cursor.close()
