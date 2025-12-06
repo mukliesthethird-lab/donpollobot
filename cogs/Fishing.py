@@ -365,21 +365,26 @@ class Fishing(commands.Cog):
             cursor.execute('SELECT id FROM fishing_quests WHERE user_id = %s AND quest_period = %s AND created_at = %s', (user_id, 'daily', daily_key))
             if not cursor.fetchone():
                 daily_templates = [
-                    {"type": "catch_any", "criteria": "any", "min": 10, "max": 20, "reward_mult": 20},
-                    {"type": "catch_rarity", "criteria": "Common", "min": 10, "max": 15, "reward_mult": 30},
-                    {"type": "catch_rarity", "criteria": "Uncommon", "min": 5, "max": 10, "reward_mult": 50},
-                    {"type": "catch_rarity", "criteria": "Rare", "min": 2, "max": 5, "reward_mult": 100},
-                    {"type": "catch_weight", "criteria": "2", "min": 5, "max": 10, "reward_mult": 40}, # > 2kg
-                    {"type": "catch_weight", "criteria": "5", "min": 2, "max": 5, "reward_mult": 80}, # > 5kg
-                    {"type": "catch_weight", "criteria": "1", "min": 10, "max": 15, "reward_mult": 30}, # > 1kg
-                    {"type": "total_weight", "criteria": "total", "min": 20, "max": 30, "reward_mult": 10},
-                    {"type": "total_weight", "criteria": "total", "min": 40, "max": 50, "reward_mult": 10},
-                    {"type": "catch_specific", "criteria": "Ikan Mas", "min": 5, "max": 5, "reward_mult": 50},
-                    {"type": "catch_specific", "criteria": "Lele", "min": 5, "max": 5, "reward_mult": 50},
-                    {"type": "catch_specific", "criteria": "Nila", "min": 5, "max": 5, "reward_mult": 50},
-                    {"type": "catch_specific", "criteria": "Gurame", "min": 3, "max": 3, "reward_mult": 80},
-                    {"type": "catch_specific", "criteria": "Patin", "min": 3, "max": 3, "reward_mult": 80},
-                    {"type": "catch_specific", "criteria": "Bawal Hitam", "min": 3, "max": 3, "reward_mult": 80},
+                    # EASY (Tier 1) - Coins: 1500-2500, Scrap: 3-5
+                    {"type": "catch_any", "criteria": "any", "min": 10, "max": 20, "diff": 1},
+                    {"type": "catch_rarity", "criteria": "Common", "min": 10, "max": 15, "diff": 1},
+                    {"type": "catch_weight", "criteria": "1", "min": 10, "max": 15, "diff": 1}, # > 1kg
+                    {"type": "total_weight", "criteria": "total", "min": 20, "max": 30, "diff": 1},
+                    
+                    # MEDIUM (Tier 2) - Coins: 2500-3500, Scrap: 5-8
+                    {"type": "catch_rarity", "criteria": "Uncommon", "min": 5, "max": 10, "diff": 2},
+                    {"type": "catch_weight", "criteria": "2", "min": 5, "max": 10, "diff": 2}, # > 2kg
+                    {"type": "total_weight", "criteria": "total", "min": 40, "max": 50, "diff": 2},
+                    {"type": "catch_specific", "criteria": "Ikan Mas", "min": 5, "max": 5, "diff": 2},
+                    {"type": "catch_specific", "criteria": "Lele", "min": 5, "max": 5, "diff": 2},
+                    {"type": "catch_specific", "criteria": "Nila", "min": 5, "max": 5, "diff": 2},
+                    
+                    # HARD (Tier 3) - Coins: 3500-5000, Scrap: 8-10
+                    {"type": "catch_rarity", "criteria": "Rare", "min": 2, "max": 5, "diff": 3},
+                    {"type": "catch_weight", "criteria": "5", "min": 2, "max": 5, "diff": 3}, # > 5kg
+                    {"type": "catch_specific", "criteria": "Gurame", "min": 3, "max": 3, "diff": 3},
+                    {"type": "catch_specific", "criteria": "Patin", "min": 3, "max": 3, "diff": 3},
+                    {"type": "catch_specific", "criteria": "Bawal Hitam", "min": 3, "max": 3, "diff": 3},
                 ]
                 
                 selected_daily = random.sample(daily_templates, 5)
@@ -388,8 +393,20 @@ class Fishing(commands.Cog):
                 
                 for quest in selected_daily:
                     target_val = random.randint(quest["min"], quest["max"])
+                    diff = quest.get("diff", 1)
                     
                     # Reward Logic (70% Coin, 30% Scrap Metal)
+                    # Ranges based on Difficulty
+                    coin_range = (1500, 2500)
+                    scrap_range = (3, 5)
+                    
+                    if diff == 2:
+                        coin_range = (2500, 3500)
+                        scrap_range = (5, 8)
+                    elif diff == 3:
+                        coin_range = (3500, 5000)
+                        scrap_range = (8, 10)
+                    
                     reward_type = 'coin'
                     reward_name = None
                     reward_amount = 0
@@ -397,9 +414,9 @@ class Fishing(commands.Cog):
                     if random.random() < 0.30:
                         reward_type = 'material' # Scrap Metal
                         reward_name = 'Scrap Metal'
-                        reward_amount = random.randint(1, 5)
+                        reward_amount = random.randint(scrap_range[0], scrap_range[1])
                     else:
-                        reward_amount = target_val * quest["reward_mult"] + random.randint(50, 200)
+                        reward_amount = random.randint(coin_range[0], coin_range[1])
                     
                     cursor.execute('''
                         INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
