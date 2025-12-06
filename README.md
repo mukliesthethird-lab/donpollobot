@@ -91,6 +91,13 @@
     # Game APIs
     PUBG_API_KEY=your_pubg_api_key
     RIOT_API_KEY=your_riot_api_key
+
+    # Database Configuration (If you have database host)
+    DB_HOST=your_db_host_address
+    DB_USER=your_db_username
+    DB_PASSWORD=your_db_password
+    DB_NAME=your_database_name
+    DB_PORT=3306
     ```
 
 4.  **Run the Bot**
