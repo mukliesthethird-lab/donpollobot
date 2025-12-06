@@ -335,19 +335,9 @@ class Fishing(commands.Cog):
         except mysql.connector.Error as err:
             print(f"❌ Database error in Fishing _init_db: {err}")
         finally:
-            cursor.close()
-            conn.close()
-            
-        try:
-            cursor.execute("ALTER TABLE fishing_quests ADD COLUMN reward_type TEXT DEFAULT 'coin'")
-        except sqlite3.OperationalError:
-            pass
-            
-        try:
-            cursor.execute("ALTER TABLE fishing_quests ADD COLUMN reward_name TEXT")
-        except sqlite3.OperationalError:
-            pass
-        self.conn.commit()
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def generate_quests(self, user_id):
         """Generate Daily and Weekly quests with variations"""

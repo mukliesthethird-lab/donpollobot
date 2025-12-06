@@ -49,35 +49,9 @@ class Economy(commands.Cog):
         except Exception as e:
             print(f"Error initializing Economy DB: {e}")
         finally:
-            cursor.close()
-            conn.close()
-        # We use the existing slot_users table as the main economy table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS slot_users (
-                user_id INTEGER PRIMARY KEY,
-                balance INTEGER DEFAULT 500,
-                total_wins INTEGER DEFAULT 0,
-                total_losses INTEGER DEFAULT 0,
-                last_daily TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        # Add last_work column if it doesn't exist
-        try:
-            cursor.execute('ALTER TABLE slot_users ADD COLUMN last_work TEXT')
-        except sqlite3.OperationalError:
-            pass # Column likely already exists
-            
-        # Create loans table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS loans (
-                user_id INTEGER PRIMARY KEY,
-                amount INTEGER,
-                due_date TEXT
-            )
-        ''')
-            
-        self.conn.commit()
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     @commands.Cog.listener()
     async def on_ready(self):
