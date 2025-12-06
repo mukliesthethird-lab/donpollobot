@@ -122,7 +122,7 @@ class Fishing(commands.Cog):
         self.buff_item_data = {
             "Rokok Surya": {"price": 15000, "duration": 300, "description": "Cooldown Mancing -10s (5 Menit)", "emoji": "🚬", "type": "cooldown", "value": 10},
             "Kail Mata Dua": {"price": 20000, "duration": 300, "description": "20% Double Catch Chance (5 Menit)", "emoji": "🪝", "type": "double", "value": 20},
-            "Pancing Magnet": {"price": 20000, "duration": 300, "description": "+15% Scrap & +10% Pearl Chance (5 Menit)", "emoji": "🧲", "type": "loot", "value": 15}
+            "Pancing Magnet": {"price": 55000, "duration": 300, "description": "+10% Scrap & +3% Pearl Chance (5 Menit)", "emoji": "🧲", "type": "loot", "value": 15}
         }
         
         # Rod Data
@@ -636,6 +636,92 @@ class Fishing(commands.Cog):
         ''')
         return cursor.fetchall()
 
+    async def give_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        choices = ["Coin"]
+        
+        # Add Rods
+        choices.extend(list(self.rod_data.keys()))
+        
+        # Add Buff Items
+        choices.extend(list(self.buff_item_data.keys()))
+        
+        # Add Materials
+        choices.extend(["Scrap Metal", "Magic Pearl"])
+        
+        return [
+            app_commands.Choice(name=item, value=item)
+            for item in choices if current.lower() in item.lower()
+        ][:25]
+
+    @app_commands.command(name="give", description="[ADMIN] Give items or coins to a user")
+    @app_commands.describe(user="Target User", item="Item Name (or Coin)", amount="Amount")
+    @app_commands.autocomplete(item=give_autocomplete)
+    async def give(self, interaction: discord.Interaction, user: discord.Member, item: str, amount: int):
+        # Admin Check
+        if interaction.user.id != 719511161757761656:
+            embed = discord.Embed(title="❌ Access Denied", description="Kamu tidak memiliki akses ke command ini!", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        if amount <= 0:
+            embed = discord.Embed(title="❌ Invalid Amount", description="Jumlah harus lebih dari 0!", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # 1. COIN
+        if item == "Coin":
+            economy = self.bot.get_cog('Economy')
+            if economy:
+                new_balance = economy.update_balance(user.id, amount)
+                embed = discord.Embed(
+                    title="✅ Transaction Successful",
+                    description=f"Berhasil memberikan **{amount:,} Coins** ke {user.mention}.",
+                    color=discord.Color.green()
+                )
+                embed.add_field(name="New Balance", value=f"{new_balance:,} Coins", inline=False)
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            else:
+                embed = discord.Embed(title="❌ System Error", description="Economy Cog not loaded.", color=discord.Color.red())
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # 2. RODS
+        if item in self.rod_data:
+            self.update_rod_level(user.id, item, amount)
+            embed = discord.Embed(
+                title="✅ Item Given",
+                description=f"Berhasil memberikan **{item}** (Level {amount}) ke {user.mention}.",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # 3. BUFF ITEMS
+        if item in self.buff_item_data:
+            self.add_item(user.id, item, amount)
+            embed = discord.Embed(
+                title="✅ Item Given",
+                description=f"Berhasil memberikan **{amount}x {item}** ke {user.mention}.",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # 4. MATERIALS
+        valid_materials = ["Scrap Metal", "Magic Pearl"]
+        if item in valid_materials:
+            self.add_material(user.id, item, amount)
+            embed = discord.Embed(
+                title="✅ Material Given",
+                description=f"Berhasil memberikan **{amount}x {item}** ke {user.mention}.",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        embed = discord.Embed(title="❌ Invalid Item", description=f"Item **{item}** tidak ditemukan.", color=discord.Color.red())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     # Define Group for /fish commands
     fish_group = app_commands.Group(name="fish", description="Fishing commands")
 
@@ -760,8 +846,8 @@ class Fishing(commands.Cog):
         loot_boost = 0
         pearl_boost = 0
         if "Pancing Magnet" in buffs:
-            loot_boost = 0.15
-            pearl_boost = 0.10
+            loot_boost = 0.10
+            pearl_boost = 0.03
             
         double_catch_chance = 0
         if "Kail Mata Dua" in buffs:
@@ -890,7 +976,7 @@ class Fishing(commands.Cog):
             
         # Materials
         if material_msg:
-             embed.add_field(name="`📦 Extra Loot`", value=f"{material_msg.strip()}", inline=True)
+             embed.add_field(name="`📦 Extra Loot`", value=f"- {material_msg.strip()}", inline=True)
         
         # Footer Stats
         weight_bonus_pct = int((weight_boost - 1.0) * 100)
@@ -898,7 +984,7 @@ class Fishing(commands.Cog):
         
         buff_icons = []
         if "Rokok Surya" in buffs: buff_icons.append("🚬")
-        if "Kail Mata Dua" in buffs: buff_icons.append(":hook:")
+        if "Kail Mata Dua" in buffs: buff_icons.append("⚓")
         if "Pancing Magnet" in buffs: buff_icons.append("🧲")
         
         if buff_icons:

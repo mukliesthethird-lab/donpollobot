@@ -127,17 +127,7 @@ class Slot(commands.Cog):
         payload = self.build_slot_payload(slots, result_text, new_balance, bet, winnings)
         await self.send_raw_payload(interaction, payload)
 
-    @app_commands.command(name="give_coins", description="[Admin] Berikan koin kepada user")
-    @app_commands.describe(user="User yang akan diberikan koin", amount="Jumlah koin")
-    async def give_coins(self, interaction: discord.Interaction, user: discord.Member, amount: int):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Hanya admin!", ephemeral=True)
-            return
 
-        economy = self.get_economy()
-        if economy:
-            new_balance = economy.update_balance(user.id, amount)
-            await interaction.response.send_message(f"✅ Berhasil memberikan {amount} koin ke {user.mention}. Saldo baru: {new_balance}")
 
 async def setup(bot):
     await bot.add_cog(Slot(bot))

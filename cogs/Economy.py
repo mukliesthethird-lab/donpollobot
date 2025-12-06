@@ -252,23 +252,7 @@ class Economy(commands.Cog):
         )
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="add_money", description="[OWNER] Tambah koin ke user")
-    @app_commands.describe(amount="Jumlah koin", user="User tujuan (opsional, default diri sendiri)")
-    async def add_money(self, interaction: discord.Interaction, amount: int, user: Optional[discord.Member] = None):
-        # Restricted to specific user ID
-        if interaction.user.id != 719511161757761656:
-            await interaction.response.send_message("❌ Kamu tidak memiliki akses ke command ini!", ephemeral=True)
-            return
 
-        target = user or interaction.user
-        new_balance = self.update_balance(target.id, amount)
-        
-        embed = discord.Embed(
-            title="💰 Add Money",
-            description=f"Berhasil menambahkan **{amount:,}** koin ke {target.mention}.\nSaldo sekarang: **{new_balance:,}**",
-            color=discord.Color.green()
-        )
-        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="remove_money", description="[OWNER] Kurangi koin user")
     @app_commands.describe(amount="Jumlah koin", user="User tujuan")
