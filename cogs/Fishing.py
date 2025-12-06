@@ -664,14 +664,16 @@ class Fishing(commands.Cog):
                 increment = 0
                 if q_type == "catch_any":
                     increment = 1
-                elif q_type == "catch_rarity" and criteria == rarity:
+                elif q_type == "catch_rarity" and criteria.lower() == rarity.lower():
                     increment = 1
                 elif q_type == "catch_weight" and weight >= float(criteria):
                     increment = 1
                 elif q_type == "catch_specific" and criteria.lower() == fish_name.lower():
                     increment = 1
                 elif q_type == "total_weight":
-                    increment = max(1, int(weight)) 
+                     # Use round for fairness. Min 1 if weight > 0.
+                    val = int(round(weight))
+                    increment = max(1, val) if weight > 0 else 0
                 
                 if increment > 0:
                     new_progress = progress + increment
@@ -1277,17 +1279,17 @@ class Fishing(commands.Cog):
             start_of_week_date = (now - timedelta(days=days_since_saturday)).replace(hour=0, minute=0, second=0, microsecond=0)
             weekly_key = start_of_week_date.strftime('%Y-%m-%d')
             
-            # Fetch Active Quests
+            # Fetch Active Quests (Use expiration_date > now for robustness)
             cursor.execute('''
                 SELECT id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period, reward_type, reward_name, expiration_date
                 FROM fishing_quests 
                 WHERE user_id = %s 
                 AND (
-                    (quest_period = 'daily' AND created_at = %s)
+                    (quest_period = 'daily' AND expiration_date > %s)
                     OR
-                    (quest_period = 'weekly' AND created_at = %s)
+                    (quest_period = 'weekly' AND expiration_date > %s)
                 )
-            ''', (interaction.user.id, daily_key, weekly_key))
+            ''', (interaction.user.id, now, now))
             
             quests = cursor.fetchall()
             
