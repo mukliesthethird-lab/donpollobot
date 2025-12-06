@@ -216,7 +216,7 @@ class Fishing(commands.Cog):
             }
         }
 
-        self.conn.commit()
+
 
     def get_conn(self):
         return get_db_connection()
