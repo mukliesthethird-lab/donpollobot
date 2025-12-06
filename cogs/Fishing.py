@@ -1180,16 +1180,14 @@ class Fishing(commands.Cog):
             await interaction.response.send_message("❌ You cannot trade with bots!", ephemeral=True)
             return
 
-        view = FishTradeView(self, interaction.user, user)
-        await interaction.response.send_message(embed=view.build_embed(), view=view)
-
     @fish_group.command(name="quests", description="Lihat misi harian & mingguan fishing")
     async def fish_quests(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         self.generate_quests(interaction.user.id)
         
         conn = self.get_conn()
         if not conn:
-             await interaction.response.send_message("❌ Database Error", ephemeral=True)
+             await interaction.followup.send("❌ Database Error", ephemeral=True)
              return
         
         try:
@@ -1198,71 +1196,56 @@ class Fishing(commands.Cog):
             
             # Fetch Active Quests
             cursor.execute('''
-                SELECT id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period, reward_type, reward_name 
+                SELECT id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period, reward_type, reward_name
                 FROM fishing_quests 
-                WHERE user_id = %s AND (expiration_date IS NULL OR expiration_date > %s)
-                ORDER BY quest_period, is_claimed, id
-            ''', (interaction.user.id, now))
+                WHERE user_id = %s 
+                AND (
+                    (quest_period = 'daily' AND created_at = %s)
+                    OR
+                    (quest_period = 'weekly' AND created_at >= %s)
+                )
+            ''', (interaction.user.id, now.strftime('%Y-%m-%d'), (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d')))
+            
             quests = cursor.fetchall()
             
-            if not quests:
-                await interaction.response.send_message("❌ Gagal memuat quest. Coba lagi nanti.", ephemeral=True)
-                return
-                
-            embed = discord.Embed(
-                title="📜 Fishing Quests",
-                description=f"Selesaikan misi untuk mendapatkan hadiah menarik!",
-                color=discord.Color.gold()
-            )
-            
-            view = QuestClaimView(self, interaction.user.id, quests)
+            embed = discord.Embed(title="📜 Fishing Quests", color=discord.Color.blue())
             
             daily_text = ""
             weekly_text = ""
             
-            for i, (q_id, q_type, criteria, target, progress, reward, is_claimed, period, r_type, r_name) in enumerate(quests, 1):
-                # Format Quest Description
-                desc = ""
-                if q_type == "catch_any":
-                    desc = f"Tangkap {target} ikan apa saja"
+            for q in quests:
+                # q: 0:id, 1:type, 2:crit, 3:val, 4:prog, 5:rew_amt, 6:claimed, 7:period, 8:rew_type, 9:rew_name
+                quest_id, q_type, crit, target, progress, reward, claimed, period, r_type, r_name = q
+                
+                status_icon = "✅" if claimed else "🔹"
+                if progress >= target and not claimed: status_icon = "🎁"
+                
+                # Determine Item Name
+                item_name = ""
+                if q_type == "catch_specific":
+                    item_name = crit
                 elif q_type == "catch_rarity":
-                    desc = f"Tangkap {target} ikan {criteria}"
-                elif q_type == "catch_weight":
-                    desc = f"Tangkap {target} ikan > {criteria}kg"
-                elif q_type == "catch_specific":
-                    desc = f"Tangkap {target} {criteria}"
-                elif q_type == "total_weight":
-                    desc = f"Total tangkapan {target}kg"
+                    item_name = crit
                 
-                # Progress Bar
-                percent = min(progress / target, 1.0)
-                bar_len = 8
-                filled = int(percent * bar_len)
-                bar = "▓" * filled + "░" * (bar_len - filled)
+                desc = f"{status_icon} **{self.format_quest_desc(q_type, crit, target)}**"
+                desc += f"\n   Progress: `{min(progress, target)}/{target}`"
                 
-                status = ""
-                if is_claimed:
-                    status = "✅"
-                elif progress >= target:
-                    status = "🎁 **SIAP KLAIM**"
-                else:
-                    status = f"{int(percent*100)}%"
-                
-                # Reward Display
-                reward_str = ""
-                if r_type == 'material':
-                    icon = "🔩" if "Scrap" in r_name else "🔮"
-                    reward_str = f"{icon} **{reward}x {r_name}**"
-                else:
-                    reward_str = f"💰 **{reward}**"
-                
-                entry = f"`{desc}`\n{bar} ({progress}/{target}) | {reward_str} {status}\n"
-                
-                if period == 'weekly':
-                    weekly_text += entry
-                else:
-                    daily_text += entry
+                reward_str = f"💰 {reward:,}"
+                if r_type == 'item':
+                    reward_str = f"📦 {reward}x {r_name}"
+                elif r_type == 'material':
+                    emoji = "🔩" if r_name == "Scrap Metal" else "🔮"
+                    reward_str = f"{emoji} {reward}x {r_name}"
                     
+                desc += f" | Reward: {reward_str}\n"
+                
+                if period == 'daily':
+                    daily_text += desc
+                else:
+                    weekly_text += desc
+            
+            view = QuestClaimView(self, interaction.user.id, quests)
+            
             if daily_text:
                 embed.add_field(name="```📅 Daily Quests```", value=daily_text, inline=False)
             else:
@@ -1273,7 +1256,7 @@ class Fishing(commands.Cog):
             else:
                 embed.add_field(name="```📅 Weekly Quests```", value="*Tidak ada quest aktif.*", inline=False)
                 
-            await interaction.response.send_message(embed=embed, view=view)
+            await interaction.followup.send(embed=embed, view=view)
         finally:
              if conn.is_connected():
                 cursor.close()
