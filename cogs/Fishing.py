@@ -395,7 +395,7 @@ class Fishing(commands.Cog):
                     reward_amount = 0
                     
                     if random.random() < 0.30:
-                        reward_type = 'material'
+                        reward_type = 'material' # Scrap Metal
                         reward_name = 'Scrap Metal'
                         reward_amount = random.randint(1, 5)
                     else:
@@ -441,15 +441,14 @@ class Fishing(commands.Cog):
                     reward_name = None
                     reward_amount = 0
                     
-                    if random.random() < 0.40: # Higher chance for material in weekly
-                        reward_type = 'material'
-                        reward_name = 'Scrap Metal'
-                        reward_amount = random.randint(5, 15)
-                        if random.random() < 0.10: # Chance for Pearl
-                            reward_name = "Magic Pearl"
-                            reward_amount = 1
+                    # Weekly Reward: 60% Coin (10k-15k), 40% Pearl (1-3)
+                    if random.random() < 0.40: 
+                        reward_type = 'material' # Magic Pearl
+                        reward_name = "Magic Pearl"
+                        reward_amount = random.randint(1, 3)
                     else:
-                        reward_amount = target_val * quest["reward_mult"] + random.randint(500, 2000)
+                        reward_type = 'coin'
+                        reward_amount = random.randint(10000, 15000)
                         
                     cursor.execute('''
                         INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
