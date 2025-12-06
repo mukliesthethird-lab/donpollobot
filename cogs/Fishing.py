@@ -405,7 +405,6 @@ class Fishing(commands.Cog):
                         INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s, 'daily', %s)
                     ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, daily_key, expiry_daily))
-                    conn.commit() # Commit per batch or per insert
 
             # --- WEEKLY QUESTS (Reset Saturday) ---
             # Python weekday: Mon=0, Tue=1, ..., Fri=4, Sat=5, Sun=6
@@ -456,7 +455,9 @@ class Fishing(commands.Cog):
                         INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s, 'weekly', %s)
                     ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, start_of_week, expiry_weekly))
-                    conn.commit()
+
+            # Commit ALL changes at once
+            conn.commit()
 
         except Exception as e:
             print(f"Error generating quests: {e}")
@@ -464,6 +465,8 @@ class Fishing(commands.Cog):
              if conn.is_connected():
                 cursor.close()
                 conn.close()
+
+
 
     def get_material(self, user_id, material_name):
         conn = self.get_conn()
