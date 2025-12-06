@@ -1217,6 +1217,12 @@ class Fishing(commands.Cog):
             return f"Tangkap {target}x {criteria}"
         return f"Quest: {q_type} ({target})"
 
+    def draw_progress_bar(self, progress, target, length=10):
+        ratio = min(progress / target, 1.0)
+        filled = int(ratio * length)
+        empty = length - filled
+        return "▓" * filled + "░" * empty
+
     @fish_group.command(name="quests", description="Lihat misi harian & mingguan fishing")
     async def fish_quests(self, interaction: discord.Interaction):
         # 1. Immediate "Instant" Response (Custom Loading State)
@@ -1264,32 +1270,46 @@ class Fishing(commands.Cog):
                 # q: 0:id, 1:type, 2:crit, 3:val, 4:prog, 5:rew_amt, 6:claimed, 7:period, 8:rew_type, 9:rew_name
                 quest_id, q_type, crit, target, progress, reward, claimed, period, r_type, r_name = q
                 
-                status_icon = "✅" if claimed else "🔹"
-                if progress >= target and not claimed: status_icon = "🎁"
+                # Format Description
+                desc_text = self.format_quest_desc(q_type, crit, target)
                 
-                # Determine Item Name
-                item_name = ""
-                if q_type == "catch_specific":
-                    item_name = crit
-                elif q_type == "catch_rarity":
-                    item_name = crit
+                # Format Progress Bar
+                progress_bar = self.draw_progress_bar(progress, target)
+                percent = int((min(progress, target) / target) * 100)
                 
-                desc = f"{status_icon} **{self.format_quest_desc(q_type, crit, target)}**"
-                desc += f"\n   Progress: `{min(progress, target)}/{target}`"
-                
-                reward_str = f"💰 {reward:,}"
+                # Format Reward
                 if r_type == 'item':
                     reward_str = f"📦 {reward}x {r_name}"
                 elif r_type == 'material':
                     emoji = "🔩" if r_name == "Scrap Metal" else "🔮"
                     reward_str = f"{emoji} {reward}x {r_name}"
-                    
-                desc += f" | Reward: {reward_str}\n"
+                else:
+                    reward_str = f"💰 {reward:,}"
+
+                # Status Check
+                line_status = ""
+                if claimed:
+                    line_status = "✅ Selesai"
+                elif progress >= target:
+                    line_status = "🎁 Siap Klaim"
+                
+                # Combine into desired format
+                # Example:
+                # Total tangkapan 50kg
+                # ▓▓▓▓░░░░ (28/50) | 💰623 56%
+                
+                entry = f"**{desc_text}**\n"
+                if line_status:
+                    entry += f"{line_status} | {reward_str}\n"
+                else:
+                    entry += f"{progress_bar} ({min(progress, target)}/{target}) | {reward_str} {percent}%\n"
+                
+                entry += "\n" # Spacer
                 
                 if period == 'daily':
-                    daily_text += desc
+                    daily_text += entry
                 else:
-                    weekly_text += desc
+                    weekly_text += entry
             
             view = QuestClaimView(self, interaction.user.id, quests)
             
@@ -1306,7 +1326,6 @@ class Fishing(commands.Cog):
             # 3. Edit the loading message with final result
             await interaction.edit_original_response(embed=embed, view=view)
         except Exception as e:
-            print(f"[ERROR] Logic error in fish_quests: {e}")
             try:
                 await interaction.edit_original_response(content=f"❌ Terjadi kesalahan: {e}", embed=None)
             except:
