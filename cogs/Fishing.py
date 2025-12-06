@@ -1206,12 +1206,20 @@ class Fishing(commands.Cog):
 
     @fish_group.command(name="quests", description="Lihat misi harian & mingguan fishing")
     async def fish_quests(self, interaction: discord.Interaction):
-        # User requested "instant" response, no defer.
+        # 1. Immediate "Instant" Response (Custom Loading State)
+        # This prevents "The application did not respond" and avoids "Bot is thinking..."
+        loading_embed = discord.Embed(
+            description="🔄 *Sedang mengambil data quest...*", 
+            color=discord.Color.light_grey()
+        )
+        await interaction.response.send_message(embed=loading_embed)
+        
+        # 2. Process Logic
         self.generate_quests(interaction.user.id)
         
         conn = self.get_conn()
         if not conn:
-             await interaction.response.send_message("❌ Database Error", ephemeral=True)
+             await interaction.edit_original_response(content="❌ Database Error", embed=None)
              return
         
         try:
@@ -1279,8 +1287,9 @@ class Fishing(commands.Cog):
                 embed.add_field(name="```📅 Weekly Quests```", value=weekly_text, inline=False)
             else:
                 embed.add_field(name="```📅 Weekly Quests```", value="*Tidak ada quest aktif.*", inline=False)
-                
-            await interaction.response.send_message(embed=embed, view=view)
+            
+            # 3. Edit the loading message with final result
+            await interaction.edit_original_response(embed=embed, view=view)
         finally:
              if conn.is_connected():
                 cursor.close()
