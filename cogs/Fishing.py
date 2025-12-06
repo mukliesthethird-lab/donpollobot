@@ -1265,7 +1265,7 @@ class Fishing(commands.Cog):
             
             # Fetch Active Quests
             cursor.execute('''
-                SELECT id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period, reward_type, reward_name
+                SELECT id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period, reward_type, reward_name, expiration_date
                 FROM fishing_quests 
                 WHERE user_id = %s 
                 AND (
@@ -1282,9 +1282,15 @@ class Fishing(commands.Cog):
             daily_text = ""
             weekly_text = ""
             
+            daily_expiry = None
+            weekly_expiry = None
+            
             for q in quests:
-                # q: 0:id, 1:type, 2:crit, 3:val, 4:prog, 5:rew_amt, 6:claimed, 7:period, 8:rew_type, 9:rew_name
-                quest_id, q_type, crit, target, progress, reward, claimed, period, r_type, r_name = q
+                # q: 0:id, 1:type, 2:crit, 3:val, 4:prog, 5:rew_amt, 6:claimed, 7:period, 8:rew_type, 9:rew_name, 10:expiry
+                quest_id, q_type, crit, target, progress, reward, claimed, period, r_type, r_name, expiry = q
+                
+                if period == 'daily' and not daily_expiry: daily_expiry = expiry
+                if period == 'weekly' and not weekly_expiry: weekly_expiry = expiry
                 
                 # Format Description
                 desc_text = self.format_quest_desc(q_type, crit, target)
@@ -1309,18 +1315,15 @@ class Fishing(commands.Cog):
                 elif progress >= target:
                     line_status = "🎁 Siap Klaim"
                 
-                # Combine into desired format
-                # Example:
-                # Total tangkapan 50kg
-                # ▓▓▓▓░░░░ (28/50) | 💰623 56%
+                # output format example:
+                # `Tangkap 300 Ikan Apa Saja`
+                # ░░░░░ (0/300) | 💰13,137 0%
                 
-                entry = f"**{desc_text}**\n"
+                entry = f"`{desc_text}`\n"
                 if line_status:
                     entry += f"{line_status} | {reward_str}\n"
                 else:
                     entry += f"{progress_bar} ({min(progress, target)}/{target}) | {reward_str} {percent}%\n"
-                
-                entry += "\n" # Spacer
                 
                 if period == 'daily':
                     daily_text += entry
@@ -1329,15 +1332,21 @@ class Fishing(commands.Cog):
             
             view = QuestClaimView(self, interaction.user.id, quests)
             
+            # Helper to format timestamp
+            def get_expiry_str(dt):
+                if not dt: return ""
+                ts = int(dt.timestamp())
+                return f"\nEnds <t:{ts}:R>"
+
             if daily_text:
-                embed.add_field(name="```📅 Daily Quests```", value=daily_text, inline=False)
+                embed.add_field(name=f"📅 Daily Quests{get_expiry_str(daily_expiry)}", value=daily_text, inline=False)
             else:
-                embed.add_field(name="```📅 Daily Quests```", value="*Tidak ada quest aktif.*", inline=False)
+                embed.add_field(name="📅 Daily Quests", value="*Tidak ada quest aktif.*", inline=False)
                 
             if weekly_text:
-                embed.add_field(name="```📅 Weekly Quests```", value=weekly_text, inline=False)
+                embed.add_field(name=f"📅 Weekly Quests{get_expiry_str(weekly_expiry)}", value=weekly_text, inline=False)
             else:
-                embed.add_field(name="```📅 Weekly Quests```", value="*Tidak ada quest aktif.*", inline=False)
+                embed.add_field(name="📅 Weekly Quests", value="*Tidak ada quest aktif.*", inline=False)
             
             # 3. Edit the loading message with final result
             await interaction.edit_original_response(embed=embed, view=view)
