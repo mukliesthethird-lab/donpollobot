@@ -1,10 +1,11 @@
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 from datetime import datetime
-import sqlite3
-import aiosqlite
+import mysql.connector
 import os
+from utils.database import get_db_connection
 
 class ConfirmClearView(discord.ui.View):
     def __init__(self, member, total_warnings):
@@ -20,7 +21,8 @@ class ConfirmClearView(discord.ui.View):
         
         # Hapus semua warnings dari database
         warn_cog = interaction.client.get_cog('Warn')
-        await warn_cog.clear_user_warnings(interaction.guild.id, self.member.id)
+        # Call synchronous method (no await)
+        warn_cog.clear_user_warnings(interaction.guild.id, self.member.id)
         
         # Embed konfirmasi
         embed = discord.Embed(
@@ -55,93 +57,75 @@ class ConfirmClearView(discord.ui.View):
 class Warn(commands.Cog):
     def __init__(self, client):
         self.client = client
-        self.db_path = "database.db"
+        self._init_db()
         
-    async def init_database(self):
-        """Inisialisasi database dan tabel"""
-        async with aiosqlite.connect(self.db_path) as db:
-            # Cek apakah tabel warnings sudah ada
-            cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='warnings'")
-            table_exists = await cursor.fetchone()
-            
-            if not table_exists:
-                # Buat tabel baru dengan struktur lengkap
-                await db.execute('''
-                    CREATE TABLE warnings (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        guild_id INTEGER NOT NULL,
-                        user_id INTEGER NOT NULL,
-                        moderator_id INTEGER NOT NULL,
-                        moderator_name TEXT NOT NULL,
-                        reason TEXT NOT NULL,
-                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        case_number INTEGER NOT NULL
-                    )
-                ''')
-            else:
-                # Cek apakah kolom moderator_name sudah ada
-                cursor = await db.execute("PRAGMA table_info(warnings)")
-                columns = await cursor.fetchall()
-                column_names = [column[1] for column in columns]
-                
-                if 'moderator_name' not in column_names:
-                    # Tambahkan kolom moderator_name jika belum ada
-                    await db.execute('ALTER TABLE warnings ADD COLUMN moderator_name TEXT DEFAULT "Unknown Moderator"')
-                    print("✅ Added moderator_name column to existing warnings table")
-            
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS warn_cases (
-                    guild_id INTEGER PRIMARY KEY,
-                    current_case INTEGER DEFAULT 0
-                )
-            ''')
-            
-            await db.commit()
+    def _init_db(self):
+        """Inisialisasi database placeholder"""
+        pass
     
-    async def get_next_case_number(self, guild_id):
+    def get_next_case_number(self, guild_id):
         """Mendapatkan nomor kasus berikutnya untuk guild"""
-        async with aiosqlite.connect(self.db_path) as db:
-            # Cek apakah guild sudah ada
-            async with db.execute('SELECT current_case FROM warn_cases WHERE guild_id = ?', (guild_id,)) as cursor:
-                row = await cursor.fetchone()
+        conn = get_db_connection()
+        if not conn: return 1
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT current_case FROM warn_cases WHERE guild_id = %s', (guild_id,))
+            row = cursor.fetchone()
                 
             if row:
                 new_case = row[0] + 1
-                await db.execute('UPDATE warn_cases SET current_case = ? WHERE guild_id = ?', (new_case, guild_id))
+                cursor.execute('UPDATE warn_cases SET current_case = %s WHERE guild_id = %s', (new_case, guild_id))
             else:
                 new_case = 1
-                await db.execute('INSERT INTO warn_cases (guild_id, current_case) VALUES (?, ?)', (guild_id, new_case))
+                cursor.execute('INSERT INTO warn_cases (guild_id, current_case) VALUES (%s, %s)', (guild_id, new_case))
             
-            await db.commit()
+            conn.commit()
             return new_case
+        finally:
+            conn.close()
     
-    async def add_warning(self, guild_id, user_id, moderator_id, moderator_name, reason, case_number):
+    def add_warning(self, guild_id, user_id, moderator_id, moderator_name, reason, case_number):
         """Menambahkan warning ke database"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute('''
+        conn = get_db_connection()
+        if not conn: return
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
                 INSERT INTO warnings (guild_id, user_id, moderator_id, moderator_name, reason, case_number)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
             ''', (guild_id, user_id, moderator_id, moderator_name, reason, case_number))
-            await db.commit()
+            conn.commit()
+        finally:
+            conn.close()
     
-    async def get_user_warnings(self, guild_id, user_id):
+    def get_user_warnings(self, guild_id, user_id):
         """Mendapatkan semua warning untuk user tertentu"""
-        async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute('''
+        conn = get_db_connection()
+        if not conn: return []
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
                 SELECT * FROM warnings 
-                WHERE guild_id = ? AND user_id = ?
+                WHERE guild_id = %s AND user_id = %s
                 ORDER BY timestamp DESC
-            ''', (guild_id, user_id)) as cursor:
-                return await cursor.fetchall()
-    
-    async def clear_user_warnings(self, guild_id, user_id):
-        """Menghapus semua warning untuk user tertentu"""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute('''
-                DELETE FROM warnings 
-                WHERE guild_id = ? AND user_id = ?
             ''', (guild_id, user_id))
-            await db.commit()
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    
+    def clear_user_warnings(self, guild_id, user_id):
+        """Menghapus semua warning untuk user tertentu"""
+        conn = get_db_connection()
+        if not conn: return
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                DELETE FROM warnings 
+                WHERE guild_id = %s AND user_id = %s
+            ''', (guild_id, user_id))
+            conn.commit()
+        finally:
+            conn.close()
 
     def is_admin(self, member):
         """Cek apakah member adalah admin"""
@@ -149,8 +133,7 @@ class Warn(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        await self.init_database()
-        print('✅ Warn Cog is ready with database connection')
+        print('✅ Warn Cog is ready')
 
     @app_commands.command(name="warn", description="Memberikan peringatan kepada anggota (Admin Only)")
     @app_commands.describe(member="Member yang akan diperingatkan", reason="Alasan peringatan")
@@ -200,14 +183,14 @@ class Warn(commands.Cog):
         user_id = member.id
 
         try:
-            # Mendapatkan nomor kasus berikutnya
-            case_number = await self.get_next_case_number(guild_id)
+            # Mendapatkan nomor kasus berikutnya (Sync call)
+            case_number = self.get_next_case_number(guild_id)
             
-            # Menambahkan warning ke database dengan nama moderator
-            await self.add_warning(guild_id, user_id, interaction.user.id, interaction.user.display_name, reason, case_number)
+            # Menambahkan warning ke database dengan nama moderator (Sync call)
+            self.add_warning(guild_id, user_id, interaction.user.id, interaction.user.display_name, reason, case_number)
             
-            # Mendapatkan total warnings user
-            warnings = await self.get_user_warnings(guild_id, user_id)
+            # Mendapatkan total warnings user (Sync call)
+            warnings = self.get_user_warnings(guild_id, user_id)
             total_warnings = len(warnings)
             
             # Waktu saat ini dalam format yang lebih bagus
@@ -346,7 +329,8 @@ class Warn(commands.Cog):
         user_id = member.id
         
         try:
-            warnings = await self.get_user_warnings(guild_id, user_id)
+            # Sync call
+            warnings = self.get_user_warnings(guild_id, user_id)
             
             if not warnings:
                 embed = discord.Embed(
@@ -368,7 +352,17 @@ class Warn(commands.Cog):
                     # Gunakan moderator_name dari database (kolom ke-4, index 4)
                     moderator_name = warning[4]  # moderator_name dari database
                     
-                    warning_time = datetime.fromisoformat(warning[6].replace('Z', '+00:00'))
+                    # Ensure timestamp is parsed correctly (it might come as datetime object or string)
+                    warning_ts = warning[6]
+                    if isinstance(warning_ts, str):
+                        try:
+                            # Try parsing if it's string (e.g. from sqlite text)
+                            warning_time = datetime.fromisoformat(warning_ts.replace('Z', '+00:00'))
+                        except:
+                            warning_time = datetime.utcnow() # Fallback
+                    else:
+                        warning_time = warning_ts # It's likely a datetime object from MySQL connector
+                        
                     time_formatted = warning_time.strftime("%d/%m/%Y %H:%M")
                     
                     embed.add_field(
@@ -448,4 +442,5 @@ class ClearWarningsView(discord.ui.View):
 
 async def setup(client):
     await client.add_cog(Warn(client))
+
 # Maintenance update

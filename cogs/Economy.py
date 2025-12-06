@@ -1,23 +1,56 @@
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-import sqlite3
 import random
 from datetime import datetime, timedelta
 from typing import Optional
 import aiohttp
-
-DB_PATH = 'database.db'
+from utils.database import get_db_connection
 
 class Economy(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.conn = sqlite3.connect(DB_PATH)
         self._init_db()
+
+    def get_conn(self):
+        return get_db_connection()
 
     def _init_db(self):
         """Initialize the economy table (using existing slot_users table)"""
-        cursor = self.conn.cursor()
+        conn = self.get_conn()
+        if not conn:
+            print("❌ Failed to connect to DB in Economy init")
+            return
+            
+        cursor = conn.cursor()
+        # We use the existing slot_users table as the main economy table
+        try:
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS slot_users (
+                    user_id BIGINT PRIMARY KEY,
+                    balance BIGINT DEFAULT 500,
+                    total_wins INT DEFAULT 0,
+                    total_losses INT DEFAULT 0,
+                    last_daily TEXT,
+                    last_work TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Loans table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS loans (
+                    user_id BIGINT PRIMARY KEY,
+                    amount BIGINT,
+                    due_date TEXT
+                )
+            ''')
+            conn.commit()
+        except Exception as e:
+            print(f"Error initializing Economy DB: {e}")
+        finally:
+            cursor.close()
+            conn.close()
         # We use the existing slot_users table as the main economy table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS slot_users (
@@ -54,83 +87,135 @@ class Economy(commands.Cog):
     @tasks.loop(minutes=1)
     async def check_loans(self):
         """Background task to check for due loans"""
-        cursor = self.conn.cursor()
-        now = datetime.now()
+        conn = self.get_conn()
+        if not conn: return
         
-        # Get due loans
-        cursor.execute('SELECT user_id, amount, due_date FROM loans')
-        loans = cursor.fetchall()
-        
-        for uid, amount, due_date_str in loans:
-            try:
-                due_date = datetime.fromisoformat(due_date_str)
-                if now >= due_date:
-                    # Loan is due! Deduct balance
-                    self.update_balance(uid, -amount)
-                    
-                    # Remove from loans table
-                    cursor.execute('DELETE FROM loans WHERE user_id = ?', (uid,))
-                    self.conn.commit()
-                    
-                    print(f"[LOAN] Auto-deducted {amount} from {uid}")
-            except Exception as e:
-                print(f"[LOAN ERROR] {e}")
+        try:
+            cursor = conn.cursor()
+            now = datetime.now()
+            
+            # Get due loans
+            cursor.execute('SELECT user_id, amount, due_date FROM loans')
+            loans = cursor.fetchall()
+            
+            for uid, amount, due_date_str in loans:
+                try:
+                    due_date = datetime.fromisoformat(due_date_str)
+                    if now >= due_date:
+                        # Loan is due! Deduct balance
+                        self.update_balance(uid, -amount)
+                        
+                        # Remove from loans table
+                        cursor.execute('DELETE FROM loans WHERE user_id = %s', (uid,))
+                        conn.commit()
+                        
+                        print(f"[LOAN] Auto-deducted {amount} from {uid}")
+                except Exception as e:
+                    print(f"[LOAN ERROR] {e}")
+        except Exception as e:
+            print(f"Error in check_loans: {e}")
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def get_user_data(self, user_id: int):
         """Get user data from database"""
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT balance, total_wins, total_losses, last_daily, last_work FROM slot_users WHERE user_id = ?', (user_id,))
-        result = cursor.fetchone()
+        conn = self.get_conn()
+        if not conn: return 500, 0, 0, None, None
         
-        if not result:
-            # Create new user with starting balance
-            cursor.execute('''
-                INSERT INTO slot_users (user_id, balance, total_wins, total_losses)
-                VALUES (?, 500, 0, 0)
-            ''', (user_id,))
-            self.conn.commit()
-            return 500, 0, 0, None, None
-        
-        return result
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT balance, total_wins, total_losses, last_daily, last_work FROM slot_users WHERE user_id = %s', (user_id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                # Create new user with starting balance
+                cursor.execute('''
+                    INSERT INTO slot_users (user_id, balance, total_wins, total_losses)
+                    VALUES (%s, 500, 0, 0)
+                ''', (user_id,))
+                conn.commit()
+                return 500, 0, 0, None, None
+            
+            return result
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def get_balance(self, user_id: int) -> int:
         """Get user balance"""
-        balance, _, _, _, _ = self.get_user_data(user_id)
-        return balance
+        # Optimized: Don't call get_user_data which opens another connection
+        conn = self.get_conn()
+        if not conn: return 0
+        
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT balance FROM slot_users WHERE user_id = %s', (user_id,))
+            res = cursor.fetchone()
+            if res:
+                return res[0]
+            else:
+                # Initialize
+                self.get_user_data(user_id) 
+                return 500
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def update_balance(self, user_id: int, amount: int) -> int:
         """Update user balance. Returns new balance."""
-        cursor = self.conn.cursor()
         
-        # Ensure user exists
+        # Ensure user exists (this creates it if not)
+        # We can optimize by trying UPDATE first, if affected_rows == 0 then INSERT.
+        # But sticking to existing logic flow for safety:
         self.get_user_data(user_id)
         
-        cursor.execute('UPDATE slot_users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
-        self.conn.commit()
+        conn = self.get_conn()
+        if not conn: return 0
         
-        return self.get_balance(user_id)
+        try:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE slot_users SET balance = balance + %s WHERE user_id = %s', (amount, user_id))
+            conn.commit()
+            
+            # Fetch new balance
+            cursor.execute('SELECT balance FROM slot_users WHERE user_id = %s', (user_id,))
+            res = cursor.fetchone()
+            return res[0] if res else 0
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def transfer_money(self, sender_id: int, receiver_id: int, amount: int) -> bool:
         """Transfer money between users. Returns True if successful."""
-        if amount <= 0:
-            return False
+        if amount <= 0: return False
             
         sender_bal = self.get_balance(sender_id)
-        if sender_bal < amount:
-            return False
+        if sender_bal < amount: return False
             
         # Ensure receiver exists
         self.get_user_data(receiver_id)
         
-        cursor = self.conn.cursor()
+        conn = self.get_conn()
+        if not conn: return False
+        
         try:
-            cursor.execute('UPDATE slot_users SET balance = balance - ? WHERE user_id = ?', (amount, sender_id))
-            cursor.execute('UPDATE slot_users SET balance = balance + ? WHERE user_id = ?', (amount, receiver_id))
-            self.conn.commit()
+            cursor = conn.cursor()
+            cursor.execute('UPDATE slot_users SET balance = balance - %s WHERE user_id = %s', (amount, sender_id))
+            cursor.execute('UPDATE slot_users SET balance = balance + %s WHERE user_id = %s', (amount, receiver_id))
+            conn.commit()
             return True
         except Exception:
-            self.conn.rollback()
+            conn.rollback()
             return False
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     @app_commands.command(name="balance", description="Cek saldo koin Anda")
     async def balance(self, interaction: discord.Interaction, user: Optional[discord.Member] = None):
@@ -201,9 +286,16 @@ class Economy(commands.Cog):
         reward = 200
         self.update_balance(user_id, reward)
         
-        cursor = self.conn.cursor()
-        cursor.execute('UPDATE slot_users SET last_daily = ? WHERE user_id = ?', (now.isoformat(), user_id))
-        self.conn.commit()
+        conn = self.get_conn()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                cursor.execute('UPDATE slot_users SET last_daily = %s WHERE user_id = %s', (now.isoformat(), user_id))
+                conn.commit()
+            finally:
+                if conn.is_connected():
+                    cursor.close()
+                    conn.close()
         
         embed = discord.Embed(
             title="🌞 Daily Reward",
@@ -238,9 +330,16 @@ class Economy(commands.Cog):
         earnings = random.randint(50, 350)
         self.update_balance(user_id, earnings)
         
-        cursor = self.conn.cursor()
-        cursor.execute('UPDATE slot_users SET last_work = ? WHERE user_id = ?', (now.isoformat(), user_id))
-        self.conn.commit()
+        conn = self.get_conn()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                cursor.execute('UPDATE slot_users SET last_work = %s WHERE user_id = %s', (now.isoformat(), user_id))
+                conn.commit()
+            finally:
+                if conn.is_connected():
+                    cursor.close()
+                    conn.close()
         
         jobs = ["Barista", "Programmer", "Gamer", "Chef", "Driver", "Artist", "Editor", "Slave", "Mechanic"]
         job = random.choice(jobs)
@@ -284,64 +383,82 @@ class Economy(commands.Cog):
             await interaction.response.send_message("❌ Jumlah pinjaman harus 1 - 15000 koin!", ephemeral=True)
             return
 
-        cursor = self.conn.cursor()
-        
-        # Check if already has loan (Fast check)
-        cursor.execute('SELECT amount FROM loans WHERE user_id = ?', (user_id,))
-        if cursor.fetchone():
-            await interaction.response.send_message("❌ **Bayar dulu hutang sebelumnya!**\nLunasi hutang lama baru bisa pinjam lagi.", ephemeral=True)
-            return
-
-        due_date = datetime.now() + timedelta(days=1)
-        
+        conn = self.get_conn()
+        if not conn:
+             await interaction.response.send_message("❌ Database Error", ephemeral=True)
+             return
+             
         try:
-            # Try to insert loan first (Atomic check via Primary Key)
-            cursor.execute('INSERT INTO loans (user_id, amount, due_date) VALUES (?, ?, ?)', 
-                           (user_id, amount, due_date.isoformat()))
-            self.conn.commit()
+            cursor = conn.cursor()
             
-            # If successful, give money
-            self.update_balance(user_id, amount)
+            # Check if already has loan (Fast check)
+            cursor.execute('SELECT amount FROM loans WHERE user_id = %s', (user_id,))
+            if cursor.fetchone():
+                await interaction.response.send_message("❌ **Bayar dulu hutang sebelumnya!**\nLunasi hutang lama baru bisa pinjam lagi.", ephemeral=True)
+                return
+
+            due_date = datetime.now() + timedelta(days=1)
             
-            embed = discord.Embed(
-                title="💸 Pinjaman Berhasil",
-                description=f"Anda meminjam **{amount:,}** koin.\n\n⚠️ **Jatuh Tempo:** <t:{int(due_date.timestamp())}:R>\nJika telat, saldo akan otomatis terpotong (bisa minus).",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed)
-            
-        except sqlite3.IntegrityError:
-            # Race condition caught: User already has a loan
-            await interaction.response.send_message("❌ **Bayar dulu hutang sebelumnya!**", ephemeral=True)
-        except Exception as e:
-            print(f"Error in ngutang: {e}")
-            await interaction.response.send_message("❌ Terjadi kesalahan saat memproses pinjaman.", ephemeral=True)
+            try:
+                # Try to insert loan first (Atomic check via Primary Key)
+                cursor.execute('INSERT INTO loans (user_id, amount, due_date) VALUES (%s, %s, %s)', 
+                               (user_id, amount, due_date.isoformat()))
+                conn.commit()
+                
+                # If successful, give money
+                self.update_balance(user_id, amount)
+                
+                embed = discord.Embed(
+                    title="💸 Pinjaman Berhasil",
+                    description=f"Anda meminjam **{amount:,}** koin.\n\n⚠️ **Jatuh Tempo:** <t:{int(due_date.timestamp())}:R>\nJika telat, saldo akan otomatis terpotong (bisa minus).",
+                    color=discord.Color.red()
+                )
+                await interaction.response.send_message(embed=embed)
+                
+            except mysql.connector.IntegrityError:
+                # Race condition caught: User already has a loan
+                await interaction.response.send_message("❌ **Bayar dulu hutang sebelumnya!**", ephemeral=True)
+            except Exception as e:
+                print(f"Error in ngutang: {e}")
+                await interaction.response.send_message("❌ Terjadi kesalahan saat memproses pinjaman.", ephemeral=True)
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     @app_commands.command(name="pay_loan", description="Bayar hutang lebih awal")
     async def pay_loan(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        cursor = self.conn.cursor()
+        conn = self.get_conn()
+        if not conn: return
         
-        cursor.execute('SELECT amount FROM loans WHERE user_id = ?', (user_id,))
-        result = cursor.fetchone()
-        
-        if not result:
-            await interaction.response.send_message("✅ Anda tidak memiliki hutang!", ephemeral=True)
-            return
+        try:
+            cursor = conn.cursor()
             
-        amount = result[0]
-        balance = self.get_balance(user_id)
-        
-        if balance < amount:
-            await interaction.response.send_message(f"❌ Saldo tidak cukup untuk bayar hutang! (Butuh: {amount}, Ada: {balance})", ephemeral=True)
-            return
+            cursor.execute('SELECT amount FROM loans WHERE user_id = %s', (user_id,))
+            result = cursor.fetchone()
             
-        # Pay loan
-        self.update_balance(user_id, -amount)
-        cursor.execute('DELETE FROM loans WHERE user_id = ?', (user_id,))
-        self.conn.commit()
-        
-        await interaction.response.send_message(f"✅ Hutang sebesar **{amount:,}** koin telah lunas!", ephemeral=True)
+            if not result:
+                await interaction.response.send_message("✅ Anda tidak memiliki hutang!", ephemeral=True)
+                return
+                
+            amount = result[0]
+            balance = self.get_balance(user_id)
+            
+            if balance < amount:
+                await interaction.response.send_message(f"❌ Saldo tidak cukup untuk bayar hutang! (Butuh: {amount}, Ada: {balance})", ephemeral=True)
+                return
+                
+            # Pay loan
+            self.update_balance(user_id, -amount)
+            cursor.execute('DELETE FROM loans WHERE user_id = %s', (user_id,))
+            conn.commit()
+            
+            await interaction.response.send_message(f"✅ Hutang sebesar **{amount:,}** koin telah lunas!", ephemeral=True)
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     # =========================================================================
     # UNIFIED LEADERBOARD (RAW PAYLOAD IMPLEMENTATION)
@@ -394,19 +511,26 @@ class Economy(commands.Cog):
             content_text = "## Silakan pilih kategori leaderboard di bawah ini."
             
         elif selected_value == "economy_balance":
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT user_id, balance FROM slot_users ORDER BY balance DESC LIMIT 10')
-            top_users = cursor.fetchall()
-            
-            content_text = "## 💰 Global Rich List (Economy)\n\n"
-            if not top_users:
-                content_text += "*Belum ada data.*"
-            else:
-                for i, (uid, bal) in enumerate(top_users, 1):
-                    medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-                    user = self.bot.get_user(uid)
-                    name = user.name if user else f"User {uid}"
-                    content_text += f"{medal} **{name}** - {bal:,} koin\n"
+            conn = self.get_conn()
+            if conn:
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT user_id, balance FROM slot_users ORDER BY balance DESC LIMIT 10')
+                    top_users = cursor.fetchall()
+                    
+                    content_text = "## 💰 Global Rich List (Economy)\n\n"
+                    if not top_users:
+                        content_text += "*Belum ada data.*"
+                    else:
+                        for i, (uid, bal) in enumerate(top_users, 1):
+                            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                            user = self.bot.get_user(uid)
+                            name = user.name if user else f"User {uid}"
+                            content_text += f"{medal} **{name}** - {bal:,} koin\n"
+                finally:
+                    if conn.is_connected():
+                        cursor.close()
+                        conn.close()
 
         elif selected_value.startswith("fish_"):
             fishing_cog = self.bot.get_cog("Fishing")
@@ -522,7 +646,7 @@ class Economy(commands.Cog):
 
     def cog_unload(self):
         self.check_loans.cancel()
-        self.conn.close()
+        # self.conn.close() - Managed by pool now
 
 async def setup(bot):
     await bot.add_cog(Economy(bot))

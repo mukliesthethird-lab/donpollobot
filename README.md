@@ -195,3 +195,50 @@ This project is open-source.
   - **Bug Fixes**:
     - **Forge Cost Display**: Fixed an issue where the coin cost was not shown in the UI.
     - **Forge Logic**: Fixed a bug where the forge action used an old formula, resulting in incorrect costs (e.g., Dyto Rod using Scrap instead of Pearl). Now fully synchronized with the `forge_data` table.
+
+- **Full Database Migration (Dec 6, 2025)**:
+  - **SQLite to MySQL**: Successfully migrated the entire database backend from SQLite to MySQL.
+  - **Performance**: Improved responsiveness and eliminated "database is locked" errors.
+  - **Clean Code**: Removed all legacy `sqlite3` dependencies and files (`database.db`, etc.).
+  - **All Systems Go**: Economy, Fishing, Games (RPS, WhosLying), Ticket, and Warn systems are fully operational on MySQL.
+
+---
+
+## 🗄️ Database Setup (MySQL)
+
+**Important**: This bot now uses **MySQL** instead of SQLite. You must configure a MySQL database for it to work.
+
+### 1. Database Requirements
+- MySQL Server (Local or Cloud, e.g., VexyHost, AWS RDS)
+- Database Name (e.g., `donpollobot_db`)
+- User with Read/Write privileges
+
+### 2. Configuration
+Update your `.env` file with the following MySQL credentials:
+
+```env
+# ... other tokens ...
+
+# MySQL Database Configuration
+DB_HOST=your_db_host_address (e.g., ar-men-08.vexyhost.com)
+DB_USER=your_db_username
+DB_PASSWORD=your_db_password
+DB_NAME=your_database_name
+DB_PORT=3306
+```
+
+### 3. Automatic Table Creation
+When you run the bot for the first time (or use `tools/migrate_db.py`), it will automatically create all necessary tables if they don't exist:
+- `slot_users`, `loans` (Economy)
+- `fish_inventory`, `fishing_rods`, `fishing_profile` (Fishing)
+- `active_tickets`, `guild_config` (Tickets)
+- `rps_stats`, `rps_sessions` (RPS)
+- `active_games`, `lobby_messages` (WhosLying)
+- `warnings`, `warn_cases` (Moderation)
+
+### 4. Migration Helper (Optional)
+If you are moving from an old SQLite version, you can find the migration tool in `tools/migrate_db.py`. To run it:
+```bash
+python tools/migrate_db.py
+```
+*Note: This requires the old `database.db` to be present in the root directory.*

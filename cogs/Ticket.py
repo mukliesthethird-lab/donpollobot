@@ -1,60 +1,22 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import sqlite3
-import os
-from datetime import datetime
-import asyncio
-import random
-import string
+
+import mysql.connector
+from utils.database import get_db_connection
 
 class TicketDatabase:
-    def __init__(self, db_name="database.db"):
-        self.db_name = db_name
-        self.init_db()
+    def __init__(self):
+        self._init_db()
     
-    def init_db(self):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        # Tabel untuk konfigurasi guild
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS guild_config (
-                guild_id INTEGER PRIMARY KEY,
-                category_id INTEGER,
-                log_channel_id INTEGER,
-                panel_channel_id INTEGER,
-                panel_message_id INTEGER,
-                support_role_id INTEGER
-            )
-        ''')
-        
-        # Migration: Add support_role_id if it doesn't exist (for existing databases)
-        try:
-            cursor.execute("ALTER TABLE guild_config ADD COLUMN support_role_id INTEGER")
-        except sqlite3.OperationalError:
-            pass # Column likely already exists
-        
-        # Tabel untuk tracking tiket aktif
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS active_tickets (
-                channel_id INTEGER PRIMARY KEY,
-                guild_id INTEGER,
-                user_id INTEGER,
-                created_at TEXT,
-                reason TEXT
-            )
-        ''')
+    def _init_db(self):
+        """Tables are now created via migrate_db.py or manual SQL setup. 
+           This method ensures basic consistency if needed."""
+        pass
+    
+    def get_conn(self):
+        return get_db_connection()
 
-        # Migration: Add reason if it doesn't exist
-        try:
-            cursor.execute("ALTER TABLE active_tickets ADD COLUMN reason TEXT")
-        except sqlite3.OperationalError:
-            pass
-        
-        conn.commit()
-        conn.close()
-    
     def set_category(self, guild_id: int, category_id: int):
         self._update_config(guild_id, "category_id", category_id)
 
@@ -65,82 +27,100 @@ class TicketDatabase:
         self._update_config(guild_id, "support_role_id", role_id)
     
     def set_panel(self, guild_id: int, channel_id: int, message_id: int):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        # Check if exists first to decide INSERT or UPDATE (or use UPSERT syntax)
-        cursor.execute('SELECT guild_id FROM guild_config WHERE guild_id = ?', (guild_id,))
-        if cursor.fetchone():
-            cursor.execute('''
-                UPDATE guild_config 
-                SET panel_channel_id = ?, panel_message_id = ?
-                WHERE guild_id = ?
-            ''', (channel_id, message_id, guild_id))
-        else:
-            cursor.execute('''
-                INSERT INTO guild_config (guild_id, panel_channel_id, panel_message_id) 
-                VALUES (?, ?, ?)
-            ''', (guild_id, channel_id, message_id))
-        conn.commit()
-        conn.close()
+        conn = self.get_conn()
+        if not conn: return
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT guild_id FROM guild_config WHERE guild_id = %s', (guild_id,))
+            if cursor.fetchone():
+                cursor.execute('''
+                    UPDATE guild_config 
+                    SET panel_channel_id = %s, panel_message_id = %s
+                    WHERE guild_id = %s
+                ''', (channel_id, message_id, guild_id))
+            else:
+                cursor.execute('''
+                    INSERT INTO guild_config (guild_id, panel_channel_id, panel_message_id) 
+                    VALUES (%s, %s, %s)
+                ''', (guild_id, channel_id, message_id))
+            conn.commit()
+        finally:
+            conn.close()
 
     def _update_config(self, guild_id: int, column: str, value: int):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('SELECT guild_id FROM guild_config WHERE guild_id = ?', (guild_id,))
-        if cursor.fetchone():
-            cursor.execute(f'UPDATE guild_config SET {column} = ? WHERE guild_id = ?', (value, guild_id))
-        else:
-            cursor.execute(f'INSERT INTO guild_config (guild_id, {column}) VALUES (?, ?)', (guild_id, value))
-        conn.commit()
-        conn.close()
+        conn = self.get_conn()
+        if not conn: return
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT guild_id FROM guild_config WHERE guild_id = %s', (guild_id,))
+            if cursor.fetchone():
+                cursor.execute(f'UPDATE guild_config SET {column} = %s WHERE guild_id = %s', (value, guild_id))
+            else:
+                cursor.execute(f'INSERT INTO guild_config (guild_id, {column}) VALUES (%s, %s)', (guild_id, value))
+            conn.commit()
+        finally:
+            conn.close()
     
     def get_config(self, guild_id: int):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM guild_config WHERE guild_id = ?', (guild_id,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result:
-            # Map based on schema order
-            # 0: guild_id, 1: category_id, 2: log_channel_id, 3: panel_channel_id, 4: panel_message_id, 5: support_role_id
-            return {
-                'guild_id': result[0],
-                'category_id': result[1],
-                'log_channel_id': result[2],
-                'panel_channel_id': result[3],
-                'panel_message_id': result[4],
-                'support_role_id': result[5] if len(result) > 5 else None
-            }
-        return None
+        conn = self.get_conn()
+        if not conn: return None
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM guild_config WHERE guild_id = %s', (guild_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                # Map based on schema order: 
+                # guild_id, category_id, log_channel_id, panel_channel_id, panel_message_id, support_role_id
+                return {
+                    'guild_id': result[0],
+                    'category_id': result[1],
+                    'log_channel_id': result[2],
+                    'panel_channel_id': result[3],
+                    'panel_message_id': result[4],
+                    'support_role_id': result[5] if len(result) > 5 else None
+                }
+            return None
+        finally:
+            conn.close()
     
     def add_ticket(self, channel_id: int, guild_id: int, user_id: int, reason: str = None):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO active_tickets (channel_id, guild_id, user_id, created_at, reason)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (channel_id, guild_id, user_id, datetime.now().isoformat(), reason))
-        conn.commit()
-        conn.close()
+        conn = self.get_conn()
+        if not conn: return
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO active_tickets (channel_id, guild_id, user_id, created_at, reason)
+                VALUES (%s, %s, %s, %s, %s)
+            ''', (channel_id, guild_id, user_id, datetime.now().isoformat(), reason))
+            conn.commit()
+        finally:
+            conn.close()
     
     def remove_ticket(self, channel_id: int):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM active_tickets WHERE channel_id = ?', (channel_id,))
-        conn.commit()
-        conn.close()
+        conn = self.get_conn()
+        if not conn: return
+        try:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM active_tickets WHERE channel_id = %s', (channel_id,))
+            conn.commit()
+        finally:
+            conn.close()
     
     def get_user_ticket(self, guild_id: int, user_id: int):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT channel_id FROM active_tickets 
-            WHERE guild_id = ? AND user_id = ?
-        ''', (guild_id, user_id))
-        result = cursor.fetchone()
-        conn.close()
-        return result[0] if result else None
+        conn = self.get_conn()
+        if not conn: return None
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT channel_id FROM active_tickets 
+                WHERE guild_id = %s AND user_id = %s
+            ''', (guild_id, user_id))
+            result = cursor.fetchone()
+            return result[0] if result else None
+        finally:
+            conn.close()
+
 
 class TicketModal(discord.ui.Modal, title="Buat Tiket Baru"):
     reason = discord.ui.TextInput(

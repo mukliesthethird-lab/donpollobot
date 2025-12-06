@@ -1,11 +1,13 @@
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, View
 import asyncio
 import random
-import sqlite3
 from typing import Dict, Optional, List
+from utils.database import get_db_connection
+import time
 
 class RPSGame:
     """Class to manage individual RPS game sessions"""
@@ -182,7 +184,7 @@ class RPS(commands.Cog):
     def __init__(self, client):
         self.client = client
         self.active_games: Dict[int, RPSGame] = {}
-        self.conn = sqlite3.connect('database.db')
+        # self.conn = sqlite3.connect('database.db') # Replaced with connection pooling
         self._init_db()
         self.emojis = {"Batu": "✊", "Gunting": "✌️", "Kertas": "📰"}
 
@@ -190,42 +192,11 @@ class RPS(commands.Cog):
         return self.client.get_cog('Economy')
 
     def _init_db(self):
-        """Initialize database tables"""
-        cursor = self.conn.cursor()
-        
-        # Main stats table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS rps_stats (
-                user_id INTEGER PRIMARY KEY,
-                total_games INTEGER DEFAULT 0,
-                games_won INTEGER DEFAULT 0,
-                games_lost INTEGER DEFAULT 0,
-                rounds_won INTEGER DEFAULT 0,
-                rounds_lost INTEGER DEFAULT 0,
-                rounds_tied INTEGER DEFAULT 0,
-                last_played INTEGER DEFAULT 0
-            )
-        ''')
-        
-        # Session history table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS rps_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                player1_id INTEGER,
-                player2_id INTEGER,
-                winner_id INTEGER,
-                player1_score INTEGER,
-                player2_score INTEGER,
-                rounds_played INTEGER,
-                timestamp INTEGER
-            )
-        ''')
-        
-        self.conn.commit()
+        """Initialize provided via migration"""
+        pass
 
     def cog_unload(self):
-        """Close database connection when cog is unloaded"""
-        self.conn.close()
+        pass
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -233,129 +204,145 @@ class RPS(commands.Cog):
 
     def get_player_stats(self, user_id: int) -> Dict[str, int]:
         """Get player statistics from database"""
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT total_games, games_won, games_lost, rounds_won, rounds_lost, rounds_tied
-            FROM rps_stats WHERE user_id = ?
-        ''', (user_id,))
-        result = cursor.fetchone()
+        conn = get_db_connection()
+        if not conn: return {'total_games':0, 'games_won':0, 'games_lost':0, 'rounds_won':0, 'rounds_lost':0, 'rounds_tied':0}
         
-        if result:
-            return {
-                'total_games': result[0],
-                'games_won': result[1],
-                'games_lost': result[2],
-                'rounds_won': result[3],
-                'rounds_lost': result[4],
-                'rounds_tied': result[5]
-            }
-        else:
-            # Create new player entry
+        try:
+            cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO rps_stats (user_id) VALUES (?)
+                SELECT total_games, games_won, games_lost, rounds_won, rounds_lost, rounds_tied
+                FROM rps_stats WHERE user_id = %s
             ''', (user_id,))
-            self.conn.commit()
-            return {
-                'total_games': 0,
-                'games_won': 0,
-                'games_lost': 0,
-                'rounds_won': 0,
-                'rounds_lost': 0,
-                'rounds_tied': 0
-            }
+            result = cursor.fetchone()
+            
+            if result:
+                return {
+                    'total_games': result[0],
+                    'games_won': result[1],
+                    'games_lost': result[2],
+                    'rounds_won': result[3],
+                    'rounds_lost': result[4],
+                    'rounds_tied': result[5]
+                }
+            else:
+                # Create new player entry
+                cursor.execute('''
+                    INSERT INTO rps_stats (user_id) VALUES (%s)
+                ''', (user_id,))
+                conn.commit()
+                return {
+                    'total_games': 0,
+                    'games_won': 0,
+                    'games_lost': 0,
+                    'rounds_won': 0,
+                    'rounds_lost': 0,
+                    'rounds_tied': 0
+                }
+        finally:
+            conn.close()
 
     def update_game_stats(self, game: RPSGame, session_winner: discord.Member):
         """Update game statistics after a session ends"""
-        cursor = self.conn.cursor()
-        import time
+        conn = get_db_connection()
+        if not conn: return
         
-        player1, player2 = game.player1, game.player2
-        winner_id = session_winner.id if session_winner else None
-        loser_id = player2.id if session_winner == player1 else player1.id if session_winner else None
-        
-        # Update total games and wins/losses
-        if winner_id and loser_id:
-            # Winner stats
+        try:
+            cursor = conn.cursor()
+            
+            player1, player2 = game.player1, game.player2
+            winner_id = session_winner.id if session_winner else None
+            loser_id = player2.id if session_winner == player1 else player1.id if session_winner else None
+            
+            # Update total games and wins/losses
+            if winner_id and loser_id:
+                # Winner stats
+                cursor.execute('''
+                    UPDATE rps_stats 
+                    SET total_games = total_games + 1, 
+                        games_won = games_won + 1,
+                        rounds_won = rounds_won + %s,
+                        rounds_lost = rounds_lost + %s,
+                        rounds_tied = rounds_tied + %s,
+                        last_played = %s
+                    WHERE user_id = %s
+                ''', (
+                    game.session_wins[winner_id],
+                    game.session_wins[loser_id],
+                    0,  # ties in this implementation are per round, but we're tracking game-level
+                    int(time.time()),
+                    winner_id
+                ))
+                
+                # Loser stats
+                cursor.execute('''
+                    UPDATE rps_stats 
+                    SET total_games = total_games + 1, 
+                        games_lost = games_lost + 1,
+                        rounds_won = rounds_won + %s,
+                        rounds_lost = rounds_lost + %s,
+                        rounds_tied = rounds_tied + %s,
+                        last_played = %s
+                    WHERE user_id = %s
+                ''', (
+                    game.session_wins[loser_id],
+                    game.session_wins[winner_id],
+                    0,
+                    int(time.time()),
+                    loser_id
+                ))
+            
+            # Record session in history
             cursor.execute('''
-                UPDATE rps_stats 
-                SET total_games = total_games + 1, 
-                    games_won = games_won + 1,
-                    rounds_won = rounds_won + ?,
-                    rounds_lost = rounds_lost + ?,
-                    rounds_tied = rounds_tied + ?,
-                    last_played = ?
-                WHERE user_id = ?
+                INSERT INTO rps_sessions 
+                (player1_id, player2_id, winner_id, player1_score, player2_score, rounds_played, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             ''', (
-                game.session_wins[winner_id],
-                game.session_wins[loser_id],
-                0,  # ties in this implementation are per round, but we're tracking game-level
-                int(time.time()),
-                winner_id
+                player1.id,
+                player2.id,
+                winner_id,
+                game.session_wins[player1.id],
+                game.session_wins[player2.id],
+                game.rounds_played,
+                int(time.time())
             ))
             
-            # Loser stats
-            cursor.execute('''
-                UPDATE rps_stats 
-                SET total_games = total_games + 1, 
-                    games_lost = games_lost + 1,
-                    rounds_won = rounds_won + ?,
-                    rounds_lost = rounds_lost + ?,
-                    rounds_tied = rounds_tied + ?,
-                    last_played = ?
-                WHERE user_id = ?
-            ''', (
-                game.session_wins[loser_id],
-                game.session_wins[winner_id],
-                0,
-                int(time.time()),
-                loser_id
-            ))
-        
-        # Record session in history
-        cursor.execute('''
-            INSERT INTO rps_sessions 
-            (player1_id, player2_id, winner_id, player1_score, player2_score, rounds_played, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            player1.id,
-            player2.id,
-            winner_id,
-            game.session_wins[player1.id],
-            game.session_wins[player2.id],
-            game.rounds_played,
-            int(time.time())
-        ))
-        
-        self.conn.commit()
+            conn.commit()
+        finally:
+            conn.close()
 
     def update_round_stats(self, winner_id: Optional[int], loser_id: Optional[int], is_tie: bool = False):
         """Update round-level statistics"""
-        cursor = self.conn.cursor()
-        import time
+        conn = get_db_connection()
+        if not conn: return
         
-        if is_tie and winner_id and loser_id:
-            # Both players get a tie
-            cursor.execute('''
-                UPDATE rps_stats 
-                SET rounds_tied = rounds_tied + 1, last_played = ?
-                WHERE user_id IN (?, ?)
-            ''', (int(time.time()), winner_id, loser_id))
-        elif winner_id and loser_id:
-            # Winner gets a round win
-            cursor.execute('''
-                UPDATE rps_stats 
-                SET rounds_won = rounds_won + 1, last_played = ?
-                WHERE user_id = ?
-            ''', (int(time.time()), winner_id))
+        try:
+            cursor = conn.cursor()
             
-            # Loser gets a round loss
-            cursor.execute('''
-                UPDATE rps_stats 
-                SET rounds_lost = rounds_lost + 1, last_played = ?
-                WHERE user_id = ?
-            ''', (int(time.time()), loser_id))
-        
-        self.conn.commit()
+            if is_tie and winner_id and loser_id:
+                # Both players get a tie
+                cursor.execute('''
+                    UPDATE rps_stats 
+                    SET rounds_tied = rounds_tied + 1, last_played = %s
+                    WHERE user_id IN (%s, %s)
+                ''', (int(time.time()), winner_id, loser_id))
+            elif winner_id and loser_id:
+                # Winner gets a round win
+                cursor.execute('''
+                    UPDATE rps_stats 
+                    SET rounds_won = rounds_won + 1, last_played = %s
+                    WHERE user_id = %s
+                ''', (int(time.time()), winner_id))
+                
+                # Loser gets a round loss
+                cursor.execute('''
+                    UPDATE rps_stats 
+                    SET rounds_lost = rounds_lost + 1, last_played = %s
+                    WHERE user_id = %s
+                ''', (int(time.time()), loser_id))
+            
+            conn.commit()
+        finally:
+            conn.close()
 
     def create_session_stats_embed(self, game: RPSGame) -> discord.Embed:
         """Create current session statistics embed"""
@@ -747,139 +734,153 @@ class RPS(commands.Cog):
         
         await interaction.response.send_message(embed=embed)
 
+
     @app_commands.command(name="rps_leaderboard", description="🏆 Lihat papan peringkat RPS server")
     async def rps_leaderboard(self, interaction: discord.Interaction, sort_by: str = "games"):
         """Display RPS leaderboard with different sorting options"""
+        conn = get_db_connection()
+        if not conn: return
         
-        cursor = self.conn.cursor()
-        
-        # Define sorting options
-        sort_options = {
-            "games": ("games_won", "Games Won"),
-            "winrate": ("(games_won * 1.0 / CASE WHEN total_games = 0 THEN 1 ELSE total_games END)", "Win Rate"),
-            "rounds": ("rounds_won", "Rounds Won"),
-            "total": ("total_games", "Total Games")
-        }
-        
-        if sort_by not in sort_options:
-            sort_by = "games"
-        
-        sort_column, sort_name = sort_options[sort_by]
-        
-        # Get top 10 players
-        cursor.execute(f'''
-            SELECT user_id, total_games, games_won, games_lost, rounds_won, rounds_lost, rounds_tied
-            FROM rps_stats 
-            WHERE total_games > 0
-            ORDER BY {sort_column} DESC, total_games DESC
-            LIMIT 10
-        ''')
-        top_players = cursor.fetchall()
-        
-        if not top_players:
+        try:
+            cursor = conn.cursor()
+            
+            # Define sorting options
+            sort_options = {
+                "games": ("games_won", "Games Won"),
+                "winrate": ("(games_won * 1.0 / CASE WHEN total_games = 0 THEN 1 ELSE total_games END)", "Win Rate"),
+                "rounds": ("rounds_won", "Rounds Won"),
+                "total": ("total_games", "Total Games")
+            }
+            
+            if sort_by not in sort_options:
+                sort_by = "games"
+            
+            sort_column, sort_name = sort_options[sort_by]
+            
+            # Get top 10 players
+            # Safe to interpolate sort_column because it is validated against keys of sort_options
+            cursor.execute(f'''
+                SELECT user_id, total_games, games_won, games_lost, rounds_won, rounds_lost, rounds_tied
+                FROM rps_stats 
+                WHERE total_games > 0
+                ORDER BY {sort_column} DESC, total_games DESC
+                LIMIT 10
+            ''')
+            top_players = cursor.fetchall()
+            
+            if not top_players:
+                embed = discord.Embed(
+                    title="🏆 Papan Peringkat RPS",
+                    description="Belum ada yang bermain RPS di server ini!\nGunakan `/rps @member` untuk memulai.",
+                    color=discord.Color.blue()
+                )
+                await interaction.response.send_message(embed=embed)
+                return
+            
             embed = discord.Embed(
                 title="🏆 Papan Peringkat RPS",
-                description="Belum ada yang bermain RPS di server ini!\nGunakan `/rps @member` untuk memulai.",
-                color=discord.Color.blue()
+                description=f"Top 10 pemain RPS (diurutkan berdasarkan {sort_name}):",
+                color=discord.Color.gold()
             )
+            
+            medals = ["🥇", "🥈", "🥉"]
+            
+            leaderboard_text = ""
+            
+            for i, (user_id, total_games, games_won, games_lost, rounds_won, rounds_lost, rounds_tied) in enumerate(top_players):
+                try:
+                    user = await self.client.fetch_user(user_id)
+                    medal = medals[i] if i < 3 else f"**{i+1}.**"
+                    
+                    # Calculate win rates
+                    game_win_rate = (games_won / max(1, total_games)) * 100
+                    total_rounds = rounds_won + rounds_lost + rounds_tied
+                    round_win_rate = (rounds_won / max(1, total_rounds)) * 100
+                    
+                    # Format based on sort type
+                    if sort_by == "games":
+                        main_stat = f"🏆 {games_won} games"
+                    elif sort_by == "winrate":
+                        main_stat = f"📊 {game_win_rate:.1f}% win rate"
+                    elif sort_by == "rounds":
+                        main_stat = f"⚡ {rounds_won} rounds"
+                    else:  # total
+                        main_stat = f"🎮 {total_games} games"
+                    
+                    leaderboard_text += f"{medal} **{user.display_name}**\n"
+                    leaderboard_text += f"└ {main_stat} • {total_games} total games\n\n"
+                    
+                except discord.NotFound:
+                    continue
+            
+            embed.description += f"\n\n{leaderboard_text}"
+            embed.set_footer(text="💡 Tip: First to 3 wins in each game session!")
+            
             await interaction.response.send_message(embed=embed)
-            return
-        
-        embed = discord.Embed(
-            title="🏆 Papan Peringkat RPS",
-            description=f"Top 10 pemain RPS (diurutkan berdasarkan {sort_name}):",
-            color=discord.Color.gold()
-        )
-        
-        medals = ["🥇", "🥈", "🥉"]
-        
-        leaderboard_text = ""
-        
-        for i, (user_id, total_games, games_won, games_lost, rounds_won, rounds_lost, rounds_tied) in enumerate(top_players):
-            try:
-                user = await self.client.fetch_user(user_id)
-                medal = medals[i] if i < 3 else f"**{i+1}.**"
-                
-                # Calculate win rates
-                game_win_rate = (games_won / max(1, total_games)) * 100
-                total_rounds = rounds_won + rounds_lost + rounds_tied
-                round_win_rate = (rounds_won / max(1, total_rounds)) * 100
-                
-                # Format based on sort type
-                if sort_by == "games":
-                    main_stat = f"🏆 {games_won} games"
-                elif sort_by == "winrate":
-                    main_stat = f"📊 {game_win_rate:.1f}% win rate"
-                elif sort_by == "rounds":
-                    main_stat = f"⚡ {rounds_won} rounds"
-                else:  # total
-                    main_stat = f"🎮 {total_games} games"
-                
-                leaderboard_text += f"{medal} **{user.display_name}**\n"
-                leaderboard_text += f"└ {main_stat} • {total_games} total games\n\n"
-                
-            except discord.NotFound:
-                continue
-        
-        embed.description += f"\n\n{leaderboard_text}"
-        embed.set_footer(text="💡 Tip: First to 3 wins in each game session!")
-        
-        await interaction.response.send_message(embed=embed)
+        finally:
+            conn.close()
 
     @app_commands.command(name="rps_history", description="📋 Lihat riwayat permainan RPS Anda")
     async def rps_history(self, interaction: discord.Interaction, member: discord.Member = None):
         """View recent RPS game history"""
-        target = member or interaction.user
-        
-        if target.bot:
-            await interaction.response.send_message("❌ Bot tidak memiliki riwayat permainan!", ephemeral=True)
-            return
-        
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT player1_id, player2_id, winner_id, player1_score, player2_score, rounds_played, timestamp
-            FROM rps_sessions 
-            WHERE player1_id = ? OR player2_id = ?
-            ORDER BY timestamp DESC
-            LIMIT 10
-        ''', (target.id, target.id))
-        
-        history = cursor.fetchall()
-        
-        if not history:
+        conn = get_db_connection()
+        if not conn: return
+
+        try:
+            target = member or interaction.user
+            
+            if target.bot:
+                await interaction.response.send_message("❌ Bot tidak memiliki riwayat permainan!", ephemeral=True)
+                return
+            
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT player1_id, player2_id, winner_id, player1_score, player2_score, rounds_played, timestamp
+                FROM rps_sessions 
+                WHERE player1_id = %s OR player2_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 10
+            ''', (target.id, target.id))
+            
+            history = cursor.fetchall()
+            
+            if not history:
+                embed = discord.Embed(
+                    title=f"📋 Riwayat RPS - {target.display_name}",
+                    description="Belum ada riwayat permainan!",
+                    color=discord.Color.blue()
+                )
+                await interaction.response.send_message(embed=embed)
+                return
+            
             embed = discord.Embed(
                 title=f"📋 Riwayat RPS - {target.display_name}",
-                description="Belum ada riwayat permainan!",
                 color=discord.Color.blue()
             )
-            await interaction.response.send_message(embed=embed)
-            return
-        
-        embed = discord.Embed(
-            title=f"📋 Riwayat RPS - {target.display_name}",
-            color=discord.Color.blue()
-        )
-        
-        for match in history:
-            p1_id, p2_id, winner_id, p1_score, p2_score, rounds, timestamp = match
             
-            opponent_id = p2_id if p1_id == target.id else p1_id
-            try:
-                opponent = await self.client.fetch_user(opponent_id)
-                opponent_name = opponent.display_name
-            except:
-                opponent_name = "Unknown"
+            for match in history:
+                p1_id, p2_id, winner_id, p1_score, p2_score, rounds, timestamp = match
                 
-            result = "🏆 Menang" if winner_id == target.id else "❌ Kalah" if winner_id else "🤝 Seri"
-            score = f"{p1_score}-{p2_score}" if p1_id == target.id else f"{p2_score}-{p1_score}"
-            
-            embed.add_field(
-                name=f"{result} vs {opponent_name}",
-                value=f"Skor: {score} • {rounds} ronde",
-                inline=False
-            )
-            
-        await interaction.response.send_message(embed=embed)
+                opponent_id = p2_id if p1_id == target.id else p1_id
+                try:
+                    opponent = await self.client.fetch_user(opponent_id)
+                    opponent_name = opponent.display_name
+                except:
+                    opponent_name = "Unknown"
+                    
+                result = "🏆 Menang" if winner_id == target.id else "❌ Kalah" if winner_id else "🤝 Seri"
+                score = f"{p1_score}-{p2_score}" if p1_id == target.id else f"{p2_score}-{p1_score}"
+                
+                embed.add_field(
+                    name=f"{result} vs {opponent_name}",
+                    value=f"Skor: {score} • {rounds} ronde",
+                    inline=False
+                )
+                
+            await interaction.response.send_message(embed=embed)
+        finally:
+            conn.close()
+
 
 async def setup(bot):
     await bot.add_cog(RPS(bot))

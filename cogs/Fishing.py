@@ -1,17 +1,18 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import sqlite3
+import mysql.connector # Added
 import random
 import aiohttp
 from datetime import datetime, timedelta
+from utils.database import get_db_connection
 
-DB_PATH = 'database.db'
+# DB_PATH = 'database.db' # Not used anymore
 
 class Fishing(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.conn = sqlite3.connect(DB_PATH)
+        # self.conn = sqlite3.connect(DB_PATH) # Removed SQLite
         self._init_db()
         
         # Cooldown Mappings for Manual Check
@@ -217,106 +218,125 @@ class Fishing(commands.Cog):
 
         self.conn.commit()
 
+    def get_conn(self):
+        return get_db_connection()
+
     def _init_db(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS fish_inventory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                fish_name TEXT,
-                rarity TEXT,
-                weight REAL,
-                price INTEGER,
-                caught_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS fishing_rods (
-                user_id INTEGER,
-                rod_name TEXT,
-                level INTEGER DEFAULT 0,
-                PRIMARY KEY (user_id, rod_name)
-            )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS fishing_profile (
-                user_id INTEGER PRIMARY KEY,
-                equipped_rod TEXT DEFAULT 'Common Rod',
-                total_catches INTEGER DEFAULT 0
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS fishing_materials (
-                user_id INTEGER,
-                material_name TEXT,
-                amount INTEGER DEFAULT 0,
-                PRIMARY KEY (user_id, material_name)
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS fishing_items (
-                user_id INTEGER,
-                item_name TEXT,
-                amount INTEGER DEFAULT 0,
-                PRIMARY KEY (user_id, item_name)
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS fishing_buffs (
-                user_id INTEGER,
-                buff_name TEXT,
-                end_time TIMESTAMP,
-                PRIMARY KEY (user_id, buff_name)
-            )
-        ''')
-        
-        # Migration for existing tables
-        try:
-            cursor.execute("ALTER TABLE fishing_profile ADD COLUMN total_catches INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass # Column likely exists
-
-        try:
-            cursor.execute("ALTER TABLE fishing_rods ADD COLUMN level INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass # Column likely exists
+        conn = self.get_conn()
+        if not conn:
+            print("❌ Failed to connect to DB in Fishing init")
+            return
             
-        # Create fishing_quests table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS fishing_quests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                quest_type TEXT,
-                target_criteria TEXT,
-                target_value INTEGER,
-                progress INTEGER DEFAULT 0,
-                reward_amount INTEGER,
-                is_claimed BOOLEAN DEFAULT 0,
-                created_at DATE,
-                quest_period TEXT DEFAULT 'daily',
-                expiration_date TIMESTAMP,
-                reward_type TEXT DEFAULT 'coin',
-                reward_name TEXT
-            )
-        ''')
-        
-        self.conn.commit()
-        
-        # Migration for Quests (Add new columns)
-        # Migration for Quests (Add new columns)
+        cursor = conn.cursor()
         try:
-            cursor.execute("ALTER TABLE fishing_quests ADD COLUMN quest_period TEXT DEFAULT 'daily'")
-        except sqlite3.OperationalError:
-            pass
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS fish_inventory (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT,
+                    fish_name TEXT,
+                    rarity TEXT,
+                    weight DECIMAL(10, 2),
+                    price INT,
+                    caught_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             
-        try:
-            cursor.execute("ALTER TABLE fishing_quests ADD COLUMN expiration_date TIMESTAMP")
-        except sqlite3.OperationalError:
-            pass
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS fishing_rods (
+                    user_id BIGINT,
+                    rod_name VARCHAR(255),
+                    level INT DEFAULT 0,
+                    PRIMARY KEY (user_id, rod_name)
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS fishing_profile (
+                    user_id BIGINT PRIMARY KEY,
+                    equipped_rod TEXT,
+                    total_catches INT DEFAULT 0
+                )
+            ''')
+            
+            # Ensure fishing_profile default if created without default in previous schema 
+            # (MySQL doesn't support ALTER COLUMN SET DEFAULT easily in one go if table exists, but CREATE handles new ones)
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS fishing_materials (
+                    user_id BIGINT,
+                    material_name VARCHAR(255),
+                    amount INT DEFAULT 0,
+                    PRIMARY KEY (user_id, material_name)
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS fishing_items (
+                    user_id BIGINT,
+                    item_name VARCHAR(255),
+                    amount INT DEFAULT 0,
+                    PRIMARY KEY (user_id, item_name)
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS fishing_buffs (
+                    user_id BIGINT,
+                    buff_name VARCHAR(255),
+                    end_time TIMESTAMP,
+                    PRIMARY KEY (user_id, buff_name)
+                )
+            ''')
+            
+            # Fishing Quests
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS fishing_quests (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT,
+                    quest_type TEXT,
+                    target_criteria TEXT,
+                    target_value INT,
+                    progress INT DEFAULT 0,
+                    reward_amount INT,
+                    is_claimed BOOLEAN DEFAULT 0,
+                    created_at DATE,
+                    quest_period TEXT,
+                    expiration_date TIMESTAMP,
+                    reward_type TEXT DEFAULT 'coin',
+                    reward_name TEXT
+                )
+            ''')
+            
+            conn.commit()
+            
+            # Simple column addition checks (using try-except block for duplicate column error 1060)
+            # MySQL error code for duplicate column is 1060
+            
+            # Check/Add total_catches to fishing_profile
+            try:
+                cursor.execute("DESCRIBE fishing_profile")
+                cols = [row[0] for row in cursor.fetchall()]
+                if 'total_catches' not in cols:
+                    cursor.execute("ALTER TABLE fishing_profile ADD COLUMN total_catches INT DEFAULT 0")
+            except Exception as e:
+                print(f"Warning checking fishing_profile schema: {e}")
+
+            # Check/Add level to fishing_rods
+            try:
+                cursor.execute("DESCRIBE fishing_rods")
+                cols = [row[0] for row in cursor.fetchall()]
+                if 'level' not in cols:
+                    cursor.execute("ALTER TABLE fishing_rods ADD COLUMN level INT DEFAULT 0")
+            except Exception as e:
+                print(f"Warning checking fishing_rods schema: {e}")
+                
+            conn.commit()
+            
+        except mysql.connector.Error as err:
+            print(f"❌ Database error in Fishing _init_db: {err}")
+        finally:
+            cursor.close()
+            conn.close()
             
         try:
             cursor.execute("ALTER TABLE fishing_quests ADD COLUMN reward_type TEXT DEFAULT 'coin'")
@@ -331,162 +351,213 @@ class Fishing(commands.Cog):
 
     def generate_quests(self, user_id):
         """Generate Daily and Weekly quests with variations"""
-        cursor = self.conn.cursor()
-        now = datetime.now()
-        today_str = now.strftime('%Y-%m-%d')
+        conn = self.get_conn()
+        if not conn: return
         
-        # --- DAILY QUESTS (5 per day) ---
-        cursor.execute('SELECT id FROM fishing_quests WHERE user_id = ? AND quest_period = ? AND created_at = ?', (user_id, 'daily', today_str))
-        if not cursor.fetchone():
-            daily_templates = [
-                {"type": "catch_any", "criteria": "any", "min": 10, "max": 20, "reward_mult": 20},
-                {"type": "catch_rarity", "criteria": "Common", "min": 10, "max": 15, "reward_mult": 30},
-                {"type": "catch_rarity", "criteria": "Uncommon", "min": 5, "max": 10, "reward_mult": 50},
-                {"type": "catch_rarity", "criteria": "Rare", "min": 2, "max": 5, "reward_mult": 100},
-                {"type": "catch_weight", "criteria": "2", "min": 5, "max": 10, "reward_mult": 40}, # > 2kg
-                {"type": "catch_weight", "criteria": "5", "min": 2, "max": 5, "reward_mult": 80}, # > 5kg
-                {"type": "catch_weight", "criteria": "1", "min": 10, "max": 15, "reward_mult": 30}, # > 1kg (Actually logic says >= criteria, so this works)
-                {"type": "total_weight", "criteria": "total", "min": 20, "max": 30, "reward_mult": 10},
-                {"type": "total_weight", "criteria": "total", "min": 40, "max": 50, "reward_mult": 10},
-                {"type": "catch_specific", "criteria": "Ikan Mas", "min": 5, "max": 5, "reward_mult": 50},
-                {"type": "catch_specific", "criteria": "Lele", "min": 5, "max": 5, "reward_mult": 50},
-                {"type": "catch_specific", "criteria": "Nila", "min": 5, "max": 5, "reward_mult": 50},
-                {"type": "catch_specific", "criteria": "Gurame", "min": 3, "max": 3, "reward_mult": 80},
-                {"type": "catch_specific", "criteria": "Patin", "min": 3, "max": 3, "reward_mult": 80},
-                {"type": "catch_specific", "criteria": "Bawal Hitam", "min": 3, "max": 3, "reward_mult": 80},
-            ]
+        try:
+            cursor = conn.cursor()
+            now = datetime.now()
+            today_str = now.strftime('%Y-%m-%d')
             
-            selected_daily = random.sample(daily_templates, 5)
-            expiry_daily = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-            
-            for quest in selected_daily:
-                target_val = random.randint(quest["min"], quest["max"])
+            # --- DAILY QUESTS (5 per day) ---
+            cursor.execute('SELECT id FROM fishing_quests WHERE user_id = %s AND quest_period = %s AND created_at = %s', (user_id, 'daily', today_str))
+            if not cursor.fetchone():
+                daily_templates = [
+                    {"type": "catch_any", "criteria": "any", "min": 10, "max": 20, "reward_mult": 20},
+                    {"type": "catch_rarity", "criteria": "Common", "min": 10, "max": 15, "reward_mult": 30},
+                    {"type": "catch_rarity", "criteria": "Uncommon", "min": 5, "max": 10, "reward_mult": 50},
+                    {"type": "catch_rarity", "criteria": "Rare", "min": 2, "max": 5, "reward_mult": 100},
+                    {"type": "catch_weight", "criteria": "2", "min": 5, "max": 10, "reward_mult": 40}, # > 2kg
+                    {"type": "catch_weight", "criteria": "5", "min": 2, "max": 5, "reward_mult": 80}, # > 5kg
+                    {"type": "catch_weight", "criteria": "1", "min": 10, "max": 15, "reward_mult": 30}, # > 1kg
+                    {"type": "total_weight", "criteria": "total", "min": 20, "max": 30, "reward_mult": 10},
+                    {"type": "total_weight", "criteria": "total", "min": 40, "max": 50, "reward_mult": 10},
+                    {"type": "catch_specific", "criteria": "Ikan Mas", "min": 5, "max": 5, "reward_mult": 50},
+                    {"type": "catch_specific", "criteria": "Lele", "min": 5, "max": 5, "reward_mult": 50},
+                    {"type": "catch_specific", "criteria": "Nila", "min": 5, "max": 5, "reward_mult": 50},
+                    {"type": "catch_specific", "criteria": "Gurame", "min": 3, "max": 3, "reward_mult": 80},
+                    {"type": "catch_specific", "criteria": "Patin", "min": 3, "max": 3, "reward_mult": 80},
+                    {"type": "catch_specific", "criteria": "Bawal Hitam", "min": 3, "max": 3, "reward_mult": 80},
+                ]
                 
-                # Reward Logic (70% Coin, 30% Scrap Metal)
-                reward_type = 'coin'
-                reward_name = None
-                reward_amount = 0
+                selected_daily = random.sample(daily_templates, 5)
+                expiry_daily = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                if random.random() < 0.30:
-                    reward_type = 'material'
-                    reward_name = 'Scrap Metal'
-                    reward_amount = random.randint(1, 5)
-                else:
-                    reward_amount = target_val * quest["reward_mult"] + random.randint(50, 200)
-                
-                cursor.execute('''
-                    INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 'daily', ?)
-                ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, today_str, expiry_daily))
+                for quest in selected_daily:
+                    target_val = random.randint(quest["min"], quest["max"])
+                    
+                    # Reward Logic (70% Coin, 30% Scrap Metal)
+                    reward_type = 'coin'
+                    reward_name = None
+                    reward_amount = 0
+                    
+                    if random.random() < 0.30:
+                        reward_type = 'material'
+                        reward_name = 'Scrap Metal'
+                        reward_amount = random.randint(1, 5)
+                    else:
+                        reward_amount = target_val * quest["reward_mult"] + random.randint(50, 200)
+                    
+                    cursor.execute('''
+                        INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s, 'daily', %s)
+                    ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, today_str, expiry_daily))
 
-        # --- WEEKLY QUESTS (3 per week, reset Friday) ---
-        # Calculate start of week (Friday)
-        # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
-        # If today is Fri (4), offset is 0. If Sat (5), offset 1. If Thu (3), offset 6 (last Fri).
-        # (now.weekday() - 4) % 7 gives days since last Friday.
-        days_since_friday = (now.weekday() - 4) % 7
-        start_of_week = (now - timedelta(days=days_since_friday)).strftime('%Y-%m-%d')
-        
-        cursor.execute('SELECT id FROM fishing_quests WHERE user_id = ? AND quest_period = ? AND created_at = ?', (user_id, 'weekly', start_of_week))
-        if not cursor.fetchone():
-            weekly_templates = [
-                {"type": "catch_rarity", "criteria": "Legendary", "min": 3, "max": 5, "reward_mult": 2000},
-                {"type": "catch_rarity", "criteria": "Epic", "min": 10, "max": 15, "reward_mult": 500},
-                {"type": "catch_rarity", "criteria": "Rare", "min": 30, "max": 50, "reward_mult": 150},
-                {"type": "total_weight", "criteria": "total", "min": 300, "max": 400, "reward_mult": 20},
-                {"type": "total_weight", "criteria": "total", "min": 450, "max": 500, "reward_mult": 20},
-                {"type": "catch_weight", "criteria": "10", "min": 20, "max": 20, "reward_mult": 200}, # > 10kg x20
-                {"type": "catch_weight", "criteria": "50", "min": 5, "max": 5, "reward_mult": 500}, # > 50kg x5
-                {"type": "catch_any", "criteria": "any", "min": 300, "max": 300, "reward_mult": 30},
-                {"type": "catch_weight", "criteria": "100", "min": 1, "max": 2, "reward_mult": 2000}, # > 100kg (Hard)
-                {"type": "total_weight", "criteria": "total", "min": 600, "max": 800, "reward_mult": 25}, # Extreme Grind
-            ]
+            # --- WEEKLY QUESTS (3 per week, reset Friday) ---
+            days_since_friday = (now.weekday() - 4) % 7
+            start_of_week = (now - timedelta(days=days_since_friday)).strftime('%Y-%m-%d')
             
-            selected_weekly = random.sample(weekly_templates, 3)
-            # Expiry: Next Friday
-            expiry_weekly = (now + timedelta(days=(7 - days_since_friday))).replace(hour=0, minute=0, second=0, microsecond=0)
+            cursor.execute('SELECT id FROM fishing_quests WHERE user_id = %s AND quest_period = %s AND created_at = %s', (user_id, 'weekly', start_of_week))
+            if not cursor.fetchone():
+                weekly_templates = [
+                    {"type": "catch_rarity", "criteria": "Legendary", "min": 3, "max": 5, "reward_mult": 2000},
+                    {"type": "catch_rarity", "criteria": "Epic", "min": 10, "max": 15, "reward_mult": 500},
+                    {"type": "catch_rarity", "criteria": "Rare", "min": 30, "max": 50, "reward_mult": 150},
+                    {"type": "total_weight", "criteria": "total", "min": 300, "max": 400, "reward_mult": 20},
+                    {"type": "total_weight", "criteria": "total", "min": 450, "max": 500, "reward_mult": 20},
+                    {"type": "catch_weight", "criteria": "10", "min": 20, "max": 20, "reward_mult": 200}, # > 10kg x20
+                    {"type": "catch_weight", "criteria": "50", "min": 5, "max": 5, "reward_mult": 500}, # > 50kg x5
+                    {"type": "catch_any", "criteria": "any", "min": 300, "max": 300, "reward_mult": 30},
+                    {"type": "catch_weight", "criteria": "100", "min": 1, "max": 2, "reward_mult": 2000}, # > 100kg
+                    {"type": "total_weight", "criteria": "total", "min": 600, "max": 800, "reward_mult": 25}, 
+                ]
+                
+                selected_weekly = random.sample(weekly_templates, 3)
+                expiry_weekly = (now + timedelta(days=(7 - days_since_friday))).replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                for quest in selected_weekly:
+                    target_val = random.randint(quest["min"], quest["max"])
+                    
+                    # Reward Logic (60% Coin, 40% Magic Pearl)
+                    reward_type = 'coin'
+                    reward_name = None
+                    reward_amount = 0
+                    
+                    if random.random() < 0.40:
+                        reward_type = 'material'
+                        reward_name = 'Magic Pearl'
+                        reward_amount = random.randint(1, 3)
+                    else:
+                        base_reward = target_val * quest["reward_mult"]
+                        reward_amount = min(base_reward + random.randint(1000, 3000), 15000) 
+                    
+                    cursor.execute('''
+                        INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s, 'weekly', %s)
+                    ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, start_of_week, expiry_weekly))
             
-            for quest in selected_weekly:
-                target_val = random.randint(quest["min"], quest["max"])
-                
-                # Reward Logic (60% Coin, 40% Magic Pearl)
-                reward_type = 'coin'
-                reward_name = None
-                reward_amount = 0
-                
-                if random.random() < 0.40:
-                    reward_type = 'material'
-                    reward_name = 'Magic Pearl'
-                    reward_amount = random.randint(1, 3)
-                else:
-                    base_reward = target_val * quest["reward_mult"]
-                    reward_amount = min(base_reward + random.randint(1000, 3000), 15000) # Max 15k
-                
-                cursor.execute('''
-                    INSERT INTO fishing_quests (user_id, quest_type, target_criteria, target_value, reward_amount, reward_type, reward_name, is_claimed, created_at, quest_period, expiration_date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 'weekly', ?)
-                ''', (user_id, quest["type"], quest["criteria"], target_val, reward_amount, reward_type, reward_name, start_of_week, expiry_weekly))
-        
-        self.conn.commit()
+            conn.commit()
+        except Exception as e:
+            print(f"Error generating quests: {e}")
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def get_material(self, user_id, material_name):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT amount FROM fishing_materials WHERE user_id = ? AND material_name = ?', (user_id, material_name))
-        res = cursor.fetchone()
-        return res[0] if res else 0
+        conn = self.get_conn()
+        if not conn: return 0
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT amount FROM fishing_materials WHERE user_id = %s AND material_name = %s', (user_id, material_name))
+            res = cursor.fetchone()
+            return res[0] if res else 0
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def add_material(self, user_id, material_name, amount):
-        cursor = self.conn.cursor()
-        current = self.get_material(user_id, material_name)
-        new_amount = current + amount
-        if new_amount < 0: new_amount = 0
-        
-        cursor.execute('''
-            INSERT INTO fishing_materials (user_id, material_name, amount)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id, material_name) DO UPDATE SET amount = ?
-        ''', (user_id, material_name, new_amount, new_amount))
-        self.conn.commit()
-        return new_amount
+        conn = self.get_conn()
+        if not conn: return 0
+        try:
+            cursor = conn.cursor()
+            current = self.get_material(user_id, material_name)
+            new_amount = current + amount
+            if new_amount < 0: new_amount = 0
+            
+            cursor.execute('''
+                INSERT INTO fishing_materials (user_id, material_name, amount)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE amount = %s
+            ''', (user_id, material_name, new_amount, new_amount))
+            conn.commit()
+            return new_amount
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def get_rod_level(self, user_id, rod_name):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT level FROM fishing_rods WHERE user_id = ? AND rod_name = ?', (user_id, rod_name))
-        res = cursor.fetchone()
-        return res[0] if res else 0
+        conn = self.get_conn()
+        if not conn: return 0
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT level FROM fishing_rods WHERE user_id = %s AND rod_name = %s', (user_id, rod_name))
+            res = cursor.fetchone()
+            return res[0] if res else 0
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def update_rod_level(self, user_id, rod_name, new_level):
-        cursor = self.conn.cursor()
-        if new_level < 0: new_level = 0
-        
-        # Check if rod exists, if not (e.g. Common Rod default), insert it
-        cursor.execute('INSERT OR IGNORE INTO fishing_rods (user_id, rod_name, level) VALUES (?, ?, ?)', (user_id, rod_name, 0))
-        
-        cursor.execute('UPDATE fishing_rods SET level = ? WHERE user_id = ? AND rod_name = ?', (new_level, user_id, rod_name))
-        self.conn.commit()
+        conn = self.get_conn()
+        if not conn: return
+        try:
+            cursor = conn.cursor()
+            if new_level < 0: new_level = 0
+            
+            # MySQL 'INSERT ... ON DUPLICATE KEY UPDATE' is better
+            cursor.execute('''
+                INSERT INTO fishing_rods (user_id, rod_name, level) 
+                VALUES (%s, %s, %s) 
+                ON DUPLICATE KEY UPDATE level = %s
+            ''', (user_id, rod_name, new_level, new_level))
+            conn.commit()
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     # --- BUFF & ITEM HELPERS ---
     def add_item(self, user_id, item_name, amount):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT amount FROM fishing_items WHERE user_id = ? AND item_name = ?', (user_id, item_name))
-        res = cursor.fetchone()
-        current = res[0] if res else 0
-        new_amount = current + amount
-        
-        if new_amount <= 0:
-            cursor.execute('DELETE FROM fishing_items WHERE user_id = ? AND item_name = ?', (user_id, item_name))
-        else:
-            cursor.execute('''
-                INSERT INTO fishing_items (user_id, item_name, amount) VALUES (?, ?, ?)
-                ON CONFLICT(user_id, item_name) DO UPDATE SET amount = ?
-            ''', (user_id, item_name, new_amount, new_amount))
-        self.conn.commit()
+        conn = self.get_conn()
+        if not conn: return
+        try:
+            cursor = conn.cursor()
+            # We can use ON DUPLICATE KEY UPDATE with amount = amount + VALUES(amount) or logic
+            # Logic here: check existing first
+            cursor.execute('SELECT amount FROM fishing_items WHERE user_id = %s AND item_name = %s', (user_id, item_name))
+            res = cursor.fetchone()
+            current = res[0] if res else 0
+            new_amount = current + amount
+            
+            if new_amount <= 0:
+                cursor.execute('DELETE FROM fishing_items WHERE user_id = %s AND item_name = %s', (user_id, item_name))
+            else:
+                cursor.execute('''
+                    INSERT INTO fishing_items (user_id, item_name, amount) VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE amount = %s
+                ''', (user_id, item_name, new_amount, new_amount))
+            conn.commit()
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
     
     def get_item_amount(self, user_id, item_name):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT amount FROM fishing_items WHERE user_id = ? AND item_name = ?', (user_id, item_name))
-        res = cursor.fetchone()
-        return res[0] if res else 0
+        conn = self.get_conn()
+        if not conn: return 0
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT amount FROM fishing_items WHERE user_id = %s AND item_name = %s', (user_id, item_name))
+            res = cursor.fetchone()
+            return res[0] if res else 0
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def activate_buff(self, user_id, buff_name):
         data = self.buff_item_data.get(buff_name)
@@ -495,87 +566,103 @@ class Fishing(commands.Cog):
         duration = data['duration']
         end_time = datetime.now() + timedelta(seconds=duration)
         
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            INSERT INTO fishing_buffs (user_id, buff_name, end_time) VALUES (?, ?, ?)
-            ON CONFLICT(user_id, buff_name) DO UPDATE SET end_time = ?
-        ''', (user_id, buff_name, end_time, end_time))
-        self.conn.commit()
-        return end_time
+        conn = self.get_conn()
+        if not conn: return False
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO fishing_buffs (user_id, buff_name, end_time) VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE end_time = %s
+            ''', (user_id, buff_name, end_time, end_time))
+            conn.commit()
+            return end_time
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def get_active_buffs(self, user_id):
-        cursor = self.conn.cursor()
-        now = datetime.now()
-        cursor.execute('SELECT buff_name, end_time FROM fishing_buffs WHERE user_id = ? AND end_time > ?', (user_id, now))
-        rows = cursor.fetchall()
-        
-        buffs = {}
-        for name, end_ts in rows:
-            # Parse timestamp if string, sqlite might return str
-            if isinstance(end_ts, str):
-                try:
-                    end_ts = datetime.fromisoformat(end_ts)
-                except:
-                    continue # Valid datetime obj usually
+        conn = self.get_conn()
+        if not conn: return {}
+        try:
+            cursor = conn.cursor()
+            now = datetime.now()
+            cursor.execute('SELECT buff_name, end_time FROM fishing_buffs WHERE user_id = %s AND end_time > %s', (user_id, now))
+            rows = cursor.fetchall()
             
-            buffs[name] = {"end_time": end_ts, "data": self.buff_item_data.get(name)}
-            
-        return buffs
+            buffs = {}
+            for name, end_ts in rows:
+                if isinstance(end_ts, str):
+                    try:
+                        end_ts = datetime.fromisoformat(end_ts)
+                    except:
+                        continue 
+                
+                buffs[name] = {"end_time": end_ts, "data": self.buff_item_data.get(name)}
+                
+            return buffs
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     async def check_quest_progress(self, interaction, fish_name, rarity, weight):
         """Check and update quest progress (Daily & Weekly)"""
         user_id = interaction.user.id
         now = datetime.now()
-        cursor = self.conn.cursor()
+        conn = self.get_conn()
+        if not conn: return
         
-        # Check active quests (not claimed, not expired)
-        cursor.execute('''
-            SELECT id, quest_type, target_criteria, target_value, progress 
-            FROM fishing_quests 
-            WHERE user_id = ? AND is_claimed = 0 AND (expiration_date IS NULL OR expiration_date > ?)
-        ''', (user_id, now))
-        
-        active_quests = cursor.fetchall()
-        
-        completed_quests = []
-        
-        for q_id, q_type, criteria, target, progress in active_quests:
-            if progress >= target:
-                continue
-                
-            increment = 0
-            if q_type == "catch_any":
-                increment = 1
-            elif q_type == "catch_rarity" and criteria == rarity:
-                increment = 1
-            elif q_type == "catch_weight" and weight >= float(criteria):
-                increment = 1
-            elif q_type == "catch_specific" and criteria.lower() == fish_name.lower():
-                increment = 1
-            elif q_type == "total_weight":
-                increment = int(weight) # Or float if DB supports it, but progress is INT. Let's round or accumulate scaled.
-                # Since progress is INT, let's just add weight as INT for simplicity or change schema to REAL. 
-                # Schema is INTEGER. Let's round weight to nearest int or just int(weight).
-                # Better: int(weight * 10) to keep 1 decimal precision if needed, but for now int(weight) is fine for "Total 50kg".
-                # Actually, if catch is 0.5kg, int is 0. Let's use ceil or accumulate 1 for any catch? No.
-                # Let's assume target is in KG. If we want precision, we need REAL.
-                # For now, let's just add weight.
-                increment = max(1, int(weight)) 
+        try:
+            cursor = conn.cursor()
             
-            if increment > 0:
-                new_progress = progress + increment
-                cursor.execute('UPDATE fishing_quests SET progress = ? WHERE id = ?', (new_progress, q_id))
+            # Check active quests (not claimed, not expired)
+            cursor.execute('''
+                SELECT id, quest_type, target_criteria, target_value, progress 
+                FROM fishing_quests 
+                WHERE user_id = %s AND is_claimed = 0 AND (expiration_date IS NULL OR expiration_date > %s)
+            ''', (user_id, now))
+            
+            active_quests = cursor.fetchall()
+            
+            completed_quests = []
+            
+            for q_id, q_type, criteria, target, progress in active_quests:
+                if progress >= target:
+                    continue
+                    
+                increment = 0
+                if q_type == "catch_any":
+                    increment = 1
+                elif q_type == "catch_rarity" and criteria == rarity:
+                    increment = 1
+                elif q_type == "catch_weight" and weight >= float(criteria):
+                    increment = 1
+                elif q_type == "catch_specific" and criteria.lower() == fish_name.lower():
+                    increment = 1
+                elif q_type == "total_weight":
+                    increment = max(1, int(weight)) 
                 
-                if new_progress >= target:
-                    completed_quests.append(q_id)
-        
-        self.conn.commit()
-        
-        if completed_quests:
-            try:
-                await interaction.followup.send("🎉 **Quest Selesai!** Cek `/fish quests` untuk klaim hadiah.", ephemeral=True)
-            except:
-                pass
+                if increment > 0:
+                    new_progress = progress + increment
+                    cursor.execute('UPDATE fishing_quests SET progress = %s WHERE id = %s', (new_progress, q_id))
+                    
+                    if new_progress >= target:
+                        completed_quests.append(q_id)
+            
+            conn.commit()
+            
+            if completed_quests:
+                try:
+                    await interaction.followup.send("🎉 **Quest Selesai!** Cek `/fish quests` untuk klaim hadiah.", ephemeral=True)
+                except:
+                    pass
+        except Exception as e:
+            print(f"Error checking quests: {e}")
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def get_economy(self):
         return self.bot.get_cog('Economy')
@@ -591,50 +678,85 @@ class Fishing(commands.Cog):
                     print(f"❌ Error sending Fishing payload: {resp.status} {await resp.text()}")
 
     def get_equipped_rod(self, user_id):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT equipped_rod FROM fishing_profile WHERE user_id = ?', (user_id,))
-        res = cursor.fetchone()
-        return res[0] if res else "Common Rod"
+        conn = self.get_conn()
+        if not conn: return "Common Rod" # Default fallback
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT equipped_rod FROM fishing_profile WHERE user_id = %s', (user_id,))
+            res = cursor.fetchone()
+            return res[0] if res else "Common Rod"
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def get_owned_rods(self, user_id):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT rod_name FROM fishing_rods WHERE user_id = ?', (user_id,))
-        rows = cursor.fetchall()
-        owned = [r[0] for r in rows]
-        if "Common Rod" not in owned:
-            owned.append("Common Rod")
-        return owned
+        conn = self.get_conn()
+        if not conn: return ["Common Rod"]
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT rod_name FROM fishing_rods WHERE user_id = %s', (user_id,))
+            rows = cursor.fetchall()
+            owned = [r[0] for r in rows]
+            if "Common Rod" not in owned:
+                owned.append("Common Rod")
+            return owned
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def get_weight_leaderboard(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT user_id, fish_name, weight, rarity 
-            FROM fish_inventory 
-            ORDER BY weight DESC 
-            LIMIT 15
-        ''')
-        return cursor.fetchall()
+        conn = self.get_conn()
+        if not conn: return []
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT user_id, fish_name, weight, rarity 
+                FROM fish_inventory 
+                ORDER BY weight DESC 
+                LIMIT 15
+            ''')
+            return cursor.fetchall()
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def get_networth_leaderboard(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT user_id, SUM(price) as total_value 
-            FROM fish_inventory 
-            GROUP BY user_id 
-            ORDER BY total_value DESC 
-            LIMIT 15
-        ''')
-        return cursor.fetchall()
+        conn = self.get_conn()
+        if not conn: return []
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT user_id, SUM(price) as total_value 
+                FROM fish_inventory 
+                GROUP BY user_id 
+                ORDER BY total_value DESC 
+                LIMIT 15
+            ''')
+            return cursor.fetchall()
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     def get_top_fisher_leaderboard(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT user_id, total_catches 
-            FROM fishing_profile 
-            ORDER BY total_catches DESC 
-            LIMIT 15
-        ''')
-        return cursor.fetchall()
+        conn = self.get_conn()
+        if not conn: return []
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT user_id, total_catches 
+                FROM fishing_profile 
+                ORDER BY total_catches DESC 
+                LIMIT 15
+            ''')
+            return cursor.fetchall()
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     async def give_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         choices = ["Coin"]
@@ -652,6 +774,7 @@ class Fishing(commands.Cog):
             app_commands.Choice(name=item, value=item)
             for item in choices if current.lower() in item.lower()
         ][:25]
+
 
     @app_commands.command(name="give", description="[ADMIN] Give items or coins to a user")
     @app_commands.describe(user="Target User", item="Item Name (or Coin)", amount="Amount")
@@ -727,16 +850,23 @@ class Fishing(commands.Cog):
 
     async def item_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         user_id = interaction.user.id
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT item_name, amount FROM fishing_items WHERE user_id = ? AND item_name LIKE ?", (user_id, f"%{current}%"))
-        rows = cursor.fetchall()
-        
-        choices = []
-        for name, amount in rows:
-            label = f"{name} (x{amount})"
-            choices.append(app_commands.Choice(name=label, value=name))
-        
-        return choices[:25]
+        conn = self.get_conn()
+        if not conn: return []
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT item_name, amount FROM fishing_items WHERE user_id = %s AND item_name LIKE %s", (user_id, f"%{current}%"))
+            rows = cursor.fetchall()
+            
+            choices = []
+            for name, amount in rows:
+                label = f"{name} (x{amount})"
+                choices.append(app_commands.Choice(name=label, value=name))
+            
+            return choices[:25]
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     @fish_group.command(name="use", description="Gunakan item buff")
     @app_commands.autocomplete(item=item_autocomplete)
@@ -746,25 +876,32 @@ class Fishing(commands.Cog):
         # If no item arg, show list
         if not item:
             # Check inventory
-            cursor = self.conn.cursor()
-            cursor.execute('SELECT item_name, amount FROM fishing_items WHERE user_id = ?', (user_id,))
-            rows = cursor.fetchall()
-            
-            if not rows:
-                await interaction.response.send_message("🎒 Tas item lu kosong!", ephemeral=True)
-                return
-            
-            opts = [discord.SelectOption(label=f"{name} (x{amt})", value=name) for name, amt in rows]
-            view = discord.ui.View()
-            select = discord.ui.Select(placeholder="Pilih item...", options=opts)
-            
-            async def callback(inter):
-                if inter.user.id != user_id: return
-                await self.process_use_item(inter, select.values[0])
-            
-            select.callback = callback
-            view.add_item(select)
-            await interaction.response.send_message("Pilih item untuk dipakai:", view=view, ephemeral=True)
+            conn = self.get_conn()
+            if conn:
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT item_name, amount FROM fishing_items WHERE user_id = %s', (user_id,))
+                    rows = cursor.fetchall()
+                    
+                    if not rows:
+                        await interaction.response.send_message("🎒 Tas item lu kosong!", ephemeral=True)
+                        return
+                    
+                    opts = [discord.SelectOption(label=f"{name} (x{amt})", value=name) for name, amt in rows]
+                    view = discord.ui.View()
+                    select = discord.ui.Select(placeholder="Pilih item...", options=opts)
+                    
+                    async def callback(inter):
+                        if inter.user.id != user_id: return
+                        await self.process_use_item(inter, select.values[0])
+                    
+                    select.callback = callback
+                    view.add_item(select)
+                    await interaction.response.send_message("Pilih item untuk dipakai:", view=view, ephemeral=True)
+                finally:
+                    if conn.is_connected():
+                        cursor.close()
+                        conn.close()
         else:
             await self.process_use_item(interaction, item)
 
@@ -893,28 +1030,43 @@ class Fishing(commands.Cog):
             final_price = int(base_price * weight_multiplier)
             
             # Save
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                INSERT INTO fish_inventory (user_id, fish_name, rarity, weight, price)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (user_id, name, rarity, weight, final_price))
-            
-            caught_items.append({
-                "name": name, "rarity": rarity, "weight": weight, "price": final_price, "image": image_url
-            })
-            self.conn.commit()
+            conn = self.get_conn()
+            if conn:
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO fish_inventory (user_id, fish_name, rarity, weight, price)
+                        VALUES (%s, %s, %s, %s, %s)
+                    ''', (user_id, name, rarity, weight, final_price))
+                    
+                    caught_items.append({
+                        "name": name, "rarity": rarity, "weight": weight, "price": final_price, "image": image_url
+                    })
+                    conn.commit()
+                finally:
+                     if conn.is_connected():
+                        cursor.close()
+                        conn.close()
             
             # Quest Check
             self.generate_quests(user_id) 
             await self.check_quest_progress(interaction, name, rarity, weight)
 
         # 5. Profile Update
-        cursor.execute('''
-            INSERT INTO fishing_profile (user_id, total_catches) 
-            VALUES (?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET total_catches = total_catches + ?
-        ''', (user_id, fish_count, fish_count))
-        self.conn.commit()
+        conn = self.get_conn()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO fishing_profile (user_id, total_catches) 
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE total_catches = total_catches + %s
+                ''', (user_id, fish_count, fish_count))
+                conn.commit()
+            finally:
+                 if conn.is_connected():
+                    cursor.close()
+                    conn.close()
         
         # 6. Material Drops
         material_msg = ""
@@ -998,16 +1150,26 @@ class Fishing(commands.Cog):
     @fish_group.command(name="inventory", description="Lihat hasil pancinganmu")
     async def inventory(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (interaction.user.id,))
-        rows = cursor.fetchall()
-        
-        if not rows:
-            await interaction.followup.send("🎒 Tas ikanmu kosong! Ayo memancing dulu.", ephemeral=True)
-            return
+        conn = self.get_conn()
+        if not conn:
+             await interaction.followup.send("❌ Database Error", ephemeral=True)
+             return
+             
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = %s ORDER BY id DESC', (interaction.user.id,))
+            rows = cursor.fetchall()
             
-        view = FishingInventoryView(self, interaction, rows)
-        await view.send_initial_message()
+            if not rows:
+                await interaction.followup.send("🎒 Tas ikanmu kosong! Ayo memancing dulu.", ephemeral=True)
+                return
+                
+            view = FishingInventoryView(self, interaction, rows)
+            await view.send_initial_message()
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
     @app_commands.command(name="fishing_rod", description="Equip your fishing rod")
     async def fishing_rod(self, interaction: discord.Interaction):
         view = RodEquipView(self, interaction.user)
@@ -1035,124 +1197,140 @@ class Fishing(commands.Cog):
     async def fish_quests(self, interaction: discord.Interaction):
         self.generate_quests(interaction.user.id)
         
-        cursor = self.conn.cursor()
-        now = datetime.now()
+        conn = self.get_conn()
+        if not conn:
+             await interaction.response.send_message("❌ Database Error", ephemeral=True)
+             return
         
-        # Fetch Active Quests
-        cursor.execute('''
-            SELECT id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period, reward_type, reward_name 
-            FROM fishing_quests 
-            WHERE user_id = ? AND (expiration_date IS NULL OR expiration_date > ?)
-            ORDER BY quest_period, is_claimed, id
-        ''', (interaction.user.id, now))
-        quests = cursor.fetchall()
-        
-        if not quests:
-            await interaction.response.send_message("❌ Gagal memuat quest. Coba lagi nanti.", ephemeral=True)
-            return
+        try:
+            cursor = conn.cursor()
+            now = datetime.now()
             
-        embed = discord.Embed(
-            title="📜 Fishing Quests",
-            description=f"Selesaikan misi untuk mendapatkan hadiah menarik!",
-            color=discord.Color.gold()
-        )
-        
-        view = QuestClaimView(self, interaction.user.id, quests)
-        
-        daily_text = ""
-        weekly_text = ""
-        
-        for i, (q_id, q_type, criteria, target, progress, reward, is_claimed, period, r_type, r_name) in enumerate(quests, 1):
-            # Format Quest Description
-            desc = ""
-            if q_type == "catch_any":
-                desc = f"Tangkap {target} ikan apa saja"
-            elif q_type == "catch_rarity":
-                desc = f"Tangkap {target} ikan {criteria}"
-            elif q_type == "catch_weight":
-                desc = f"Tangkap {target} ikan > {criteria}kg"
-            elif q_type == "catch_specific":
-                desc = f"Tangkap {target} {criteria}"
-            elif q_type == "total_weight":
-                desc = f"Total tangkapan {target}kg"
+            # Fetch Active Quests
+            cursor.execute('''
+                SELECT id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period, reward_type, reward_name 
+                FROM fishing_quests 
+                WHERE user_id = %s AND (expiration_date IS NULL OR expiration_date > %s)
+                ORDER BY quest_period, is_claimed, id
+            ''', (interaction.user.id, now))
+            quests = cursor.fetchall()
             
-            # Progress Bar
-            percent = min(progress / target, 1.0)
-            bar_len = 8
-            filled = int(percent * bar_len)
-            bar = "▓" * filled + "░" * (bar_len - filled)
-            
-            status = ""
-            if is_claimed:
-                status = "✅"
-            elif progress >= target:
-                status = "🎁 **SIAP KLAIM**"
-            else:
-                status = f"{int(percent*100)}%"
-            
-            # Reward Display
-            reward_str = ""
-            if r_type == 'material':
-                icon = "🔩" if "Scrap" in r_name else "🔮"
-                reward_str = f"{icon} **{reward}x {r_name}**"
-            else:
-                reward_str = f"💰 **{reward}**"
-            
-            entry = f"`{desc}`\n{bar} ({progress}/{target}) | {reward_str} {status}\n"
-            
-            if period == 'weekly':
-                weekly_text += entry
-            else:
-                daily_text += entry
+            if not quests:
+                await interaction.response.send_message("❌ Gagal memuat quest. Coba lagi nanti.", ephemeral=True)
+                return
                 
-        if daily_text:
-            embed.add_field(name="```📅 Daily Quests```", value=daily_text, inline=False)
-        else:
-            embed.add_field(name="```📅 Daily Quests```", value="*Tidak ada quest aktif.*", inline=False)
+            embed = discord.Embed(
+                title="📜 Fishing Quests",
+                description=f"Selesaikan misi untuk mendapatkan hadiah menarik!",
+                color=discord.Color.gold()
+            )
             
-        if weekly_text:
-            embed.add_field(name="```📅 Weekly Quests```", value=weekly_text, inline=False)
-        else:
-            embed.add_field(name="```📅 Weekly Quests```", value="*Tidak ada quest aktif.*", inline=False)
+            view = QuestClaimView(self, interaction.user.id, quests)
             
-        await interaction.response.send_message(embed=embed, view=view)
+            daily_text = ""
+            weekly_text = ""
+            
+            for i, (q_id, q_type, criteria, target, progress, reward, is_claimed, period, r_type, r_name) in enumerate(quests, 1):
+                # Format Quest Description
+                desc = ""
+                if q_type == "catch_any":
+                    desc = f"Tangkap {target} ikan apa saja"
+                elif q_type == "catch_rarity":
+                    desc = f"Tangkap {target} ikan {criteria}"
+                elif q_type == "catch_weight":
+                    desc = f"Tangkap {target} ikan > {criteria}kg"
+                elif q_type == "catch_specific":
+                    desc = f"Tangkap {target} {criteria}"
+                elif q_type == "total_weight":
+                    desc = f"Total tangkapan {target}kg"
+                
+                # Progress Bar
+                percent = min(progress / target, 1.0)
+                bar_len = 8
+                filled = int(percent * bar_len)
+                bar = "▓" * filled + "░" * (bar_len - filled)
+                
+                status = ""
+                if is_claimed:
+                    status = "✅"
+                elif progress >= target:
+                    status = "🎁 **SIAP KLAIM**"
+                else:
+                    status = f"{int(percent*100)}%"
+                
+                # Reward Display
+                reward_str = ""
+                if r_type == 'material':
+                    icon = "🔩" if "Scrap" in r_name else "🔮"
+                    reward_str = f"{icon} **{reward}x {r_name}**"
+                else:
+                    reward_str = f"💰 **{reward}**"
+                
+                entry = f"`{desc}`\n{bar} ({progress}/{target}) | {reward_str} {status}\n"
+                
+                if period == 'weekly':
+                    weekly_text += entry
+                else:
+                    daily_text += entry
+                    
+            if daily_text:
+                embed.add_field(name="```📅 Daily Quests```", value=daily_text, inline=False)
+            else:
+                embed.add_field(name="```📅 Daily Quests```", value="*Tidak ada quest aktif.*", inline=False)
+                
+            if weekly_text:
+                embed.add_field(name="```📅 Weekly Quests```", value=weekly_text, inline=False)
+            else:
+                embed.add_field(name="```📅 Weekly Quests```", value="*Tidak ada quest aktif.*", inline=False)
+                
+            await interaction.response.send_message(embed=embed, view=view)
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     async def claim_quest_reward(self, interaction: discord.Interaction, quest_id: int):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT reward_amount, is_claimed, progress, target_value, reward_type, reward_name FROM fishing_quests WHERE id = ?', (quest_id,))
-        res = cursor.fetchone()
+        conn = self.get_conn()
+        if not conn: return
         
-        if not res:
-            await interaction.response.send_message("❌ Quest tidak ditemukan!", ephemeral=True)
-            return
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT reward_amount, is_claimed, progress, target_value, reward_type, reward_name FROM fishing_quests WHERE id = %s', (quest_id,))
+            res = cursor.fetchone()
             
-        reward, is_claimed, progress, target, r_type, r_name = res
-        
-        if is_claimed:
-            await interaction.response.send_message("❌ Quest sudah diklaim!", ephemeral=True)
-            return
+            if not res:
+                await interaction.response.send_message("❌ Quest tidak ditemukan!", ephemeral=True)
+                return
+                
+            reward, is_claimed, progress, target, r_type, r_name = res
             
-        if progress < target:
-            await interaction.response.send_message("❌ Quest belum selesai!", ephemeral=True)
-            return
+            if is_claimed:
+                await interaction.response.send_message("❌ Quest sudah diklaim!", ephemeral=True)
+                return
+                
+            if progress < target:
+                await interaction.response.send_message("❌ Quest belum selesai!", ephemeral=True)
+                return
+                
+            # Update DB
+            cursor.execute('UPDATE fishing_quests SET is_claimed = 1 WHERE id = %s', (quest_id,))
+            conn.commit()
             
-        # Update DB
-        cursor.execute('UPDATE fishing_quests SET is_claimed = 1 WHERE id = ?', (quest_id,))
-        self.conn.commit()
-        
-        # Add Reward
-        if r_type == 'material':
-            self.add_material(interaction.user.id, r_name, reward)
-            await interaction.response.send_message(f"🎉 **Selamat!** Kamu mendapatkan **{reward}x {r_name}**!", ephemeral=True)
-        else:
-            economy = self.get_economy()
-            if economy:
-                economy.update_balance(interaction.user.id, reward)
-                await interaction.response.send_message(f"🎉 **Selamat!** Kamu mendapatkan 💰 **{reward}** koin!", ephemeral=True)
+            # Add Reward
+            if r_type == 'material':
+                self.add_material(interaction.user.id, r_name, reward)
+                await interaction.response.send_message(f"🎉 **Selamat!** Kamu mendapatkan **{reward}x {r_name}**!", ephemeral=True)
             else:
-                await interaction.response.send_message("❌ Economy system error.", ephemeral=True)
-            
-        # Refresh UI (Optional, user can re-run command)
+                economy = self.get_economy()
+                if economy:
+                    economy.update_balance(interaction.user.id, reward)
+                    await interaction.response.send_message(f"🎉 **Selamat!** Kamu mendapatkan 💰 **{reward}** koin!", ephemeral=True)
+                else:
+                    await interaction.response.send_message("❌ Economy system error.", ephemeral=True)
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
 
 
@@ -1163,16 +1341,26 @@ class Fishing(commands.Cog):
 
     @fish_group.command(name="salvage", description="Salvage fish into materials (Scrap Metal)")
     async def salvage(self, interaction: discord.Interaction):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (interaction.user.id,))
-        rows = cursor.fetchall()
-        
-        if not rows:
-            await interaction.response.send_message("🎒 Tas ikanmu kosong! Tidak ada yang bisa di-salvage.", ephemeral=True)
-            return
+        conn = self.get_conn()
+        if not conn:
+             await interaction.response.send_message("❌ Database Error", ephemeral=True)
+             return
+             
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = %s ORDER BY id DESC', (interaction.user.id,))
+            rows = cursor.fetchall()
             
-        view = FishingSalvageView(self, interaction, rows)
-        await view.send_initial_message()
+            if not rows:
+                await interaction.response.send_message("🎒 Tas ikanmu kosong! Tidak ada yang bisa di-salvage.", ephemeral=True)
+                return
+                
+            view = FishingSalvageView(self, interaction, rows)
+            await view.send_initial_message()
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
 
     @fish_group.command(name="forge", description="Upgrade your fishing rod (Tempa)")
     async def forge(self, interaction: discord.Interaction):
@@ -1274,7 +1462,8 @@ class Fishing(commands.Cog):
                         print(f"Error updating message: {await resp.text()}")
 
     def cog_unload(self):
-        self.conn.close()
+        # MySQL connection pooling handles connections, no single persistent conn to close
+        pass
 
 class FishingInventoryView(discord.ui.View):
     def __init__(self, cog, interaction, all_rows):
@@ -1403,29 +1592,41 @@ class FishingInventoryView(discord.ui.View):
             await self.sell_all_callback(interaction)
             return
         
-        cursor = self.cog.conn.cursor()
-        
-        total_price = 0
-        count = 0
-        
-        for fid in selected_ids:
-            cursor.execute('SELECT price FROM fish_inventory WHERE id = ?', (fid,))
-            res = cursor.fetchone()
-            if res:
-                total_price += res[0]
-                cursor.execute('DELETE FROM fish_inventory WHERE id = ?', (fid,))
-                count += 1
-                
-        self.cog.conn.commit()
-        economy = self.cog.get_economy()
-        if economy:
-            economy.update_balance(interaction.user.id, total_price)
+        conn = self.cog.get_conn()
+        if not conn:
+             await interaction.response.send_message("❌ Database Error", ephemeral=True)
+             return
+             
+        try:
+            cursor = conn.cursor()
             
-        await interaction.response.send_message(f"💰 Berhasil menjual **{count}** ikan seharga **{total_price:,}** koin!", ephemeral=True)
-        
-        # Refresh data and view
-        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (self.original_interaction.user.id,))
-        self.all_rows = cursor.fetchall()
+            total_price = 0
+            count = 0
+            
+            for fid in selected_ids:
+                cursor.execute('SELECT price FROM fish_inventory WHERE id = %s', (fid,))
+                res = cursor.fetchone()
+                if res:
+                    total_price += res[0]
+                    cursor.execute('DELETE FROM fish_inventory WHERE id = %s', (fid,))
+                    count += 1
+                    
+            conn.commit()
+            
+            economy = self.cog.get_economy()
+            if economy:
+                economy.update_balance(interaction.user.id, total_price)
+                
+            await interaction.response.send_message(f"💰 Berhasil menjual **{count}** ikan seharga **{total_price:,}** koin!", ephemeral=True)
+            
+            # Refresh data and view
+            cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = %s ORDER BY id DESC', (self.original_interaction.user.id,))
+            self.all_rows = cursor.fetchall()
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
+
         self.max_pages = (len(self.all_rows) - 1) // self.items_per_page + 1
         
         if self.page >= self.max_pages and self.page > 0:
@@ -1490,26 +1691,37 @@ class ConfirmSellAllView(discord.ui.View):
     @discord.ui.button(label="✅ YA, JUAL", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
-        # Update Economy
-        economy = self.inventory_view.cog.get_economy()
-        if economy:
-            economy.update_balance(interaction.user.id, self.total_price)
-            
-        # Delete Fish
-        cursor = self.inventory_view.cog.conn.cursor()
-        if self.rarity:
-            cursor.execute('DELETE FROM fish_inventory WHERE user_id = ? AND rarity = ?', (interaction.user.id, self.rarity))
-        else:
-            cursor.execute('DELETE FROM fish_inventory WHERE user_id = ?', (interaction.user.id,))
-            
-        self.inventory_view.cog.conn.commit()
         
-        # Update Inventory View
-        self.inventory_view.all_rows = [] # Force refresh logic below will handle re-fetching if needed, but for now we clear
-        
-        # Re-fetch to see what's left (if we only sold one rarity)
-        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (interaction.user.id,))
-        self.inventory_view.all_rows = cursor.fetchall()
+        conn = self.inventory_view.cog.get_conn()
+        if not conn:
+             await interaction.followup.send("❌ Database Error", ephemeral=True)
+             return
+             
+        try:
+            # Update Economy
+            economy = self.inventory_view.cog.get_economy()
+            if economy:
+                economy.update_balance(interaction.user.id, self.total_price)
+                
+            # Delete Fish
+            cursor = conn.cursor()
+            if self.rarity:
+                cursor.execute('DELETE FROM fish_inventory WHERE user_id = %s AND rarity = %s', (interaction.user.id, self.rarity))
+            else:
+                cursor.execute('DELETE FROM fish_inventory WHERE user_id = %s', (interaction.user.id,))
+                
+            conn.commit()
+            
+            # Update Inventory View
+            self.inventory_view.all_rows = [] 
+            
+            # Re-fetch to see what's left
+            cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = %s ORDER BY id DESC', (interaction.user.id,))
+            self.inventory_view.all_rows = cursor.fetchall()
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
         
         self.inventory_view.page = 0
         self.inventory_view.max_pages = (len(self.inventory_view.all_rows) - 1) // self.inventory_view.items_per_page + 1
@@ -1638,9 +1850,19 @@ class TradeView(discord.ui.View):
         await interaction.response.send_message("Select fish to REMOVE from trade:", view=view, ephemeral=True)
 
     async def open_inventory_select(self, interaction: discord.Interaction, user):
-        cursor = self.cog.conn.cursor()
-        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (user.id,))
-        rows = cursor.fetchall()
+        conn = self.cog.get_conn()
+        if not conn:
+             await interaction.response.send_message("❌ Database Error", ephemeral=True)
+             return
+             
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = %s ORDER BY id DESC', (user.id,))
+            rows = cursor.fetchall()
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
         
         if not rows:
             await interaction.response.send_message("🎒 Your inventory is empty!", ephemeral=True)
@@ -1673,16 +1895,26 @@ class TradeView(discord.ui.View):
             await self.execute_trade(interaction)
 
     async def execute_trade(self, interaction):
-        cursor = self.cog.conn.cursor()
-        
-        # Swap Owner
-        for item in self.initiator_offer:
-            cursor.execute('UPDATE fish_inventory SET user_id = ? WHERE id = ?', (self.target.id, item['id']))
+        conn = self.cog.get_conn()
+        if not conn:
+             await interaction.followup.send("❌ Database Error", ephemeral=True)
+             return
+             
+        try:
+            cursor = conn.cursor()
             
-        for item in self.target_offer:
-            cursor.execute('UPDATE fish_inventory SET user_id = ? WHERE id = ?', (self.initiator.id, item['id']))
-            
-        self.cog.conn.commit()
+            # Swap Owner
+            for item in self.initiator_offer:
+                cursor.execute('UPDATE fish_inventory SET user_id = %s WHERE id = %s', (self.target.id, item['id']))
+                
+            for item in self.target_offer:
+                cursor.execute('UPDATE fish_inventory SET user_id = %s WHERE id = %s', (self.initiator.id, item['id']))
+                
+            conn.commit()
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
         
         self.clear_items()
         embed = self.build_embed()
@@ -1727,14 +1959,24 @@ class TradeSelectView(discord.ui.View):
         selected_ids = interaction.data["values"]
         
         # Add to offer
-        cursor = self.trade_view.cog.conn.cursor()
+        conn = self.trade_view.cog.get_conn()
+        if not conn:
+             await interaction.followup.send("❌ Database Error", ephemeral=True)
+             return
+        
         new_items = []
-        for fid in selected_ids:
-            cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE id = ?', (fid,))
-            row = cursor.fetchone()
-            if row:
-                item = {"id": row[0], "name": row[1], "rarity": row[2], "weight": row[3], "price": row[4]}
-                new_items.append(item)
+        try:
+            cursor = conn.cursor()
+            for fid in selected_ids:
+                cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE id = %s', (fid,))
+                row = cursor.fetchone()
+                if row:
+                    item = {"id": row[0], "name": row[1], "rarity": row[2], "weight": row[3], "price": row[4]}
+                    new_items.append(item)
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
         
         if self.user.id == self.trade_view.initiator.id:
             self.trade_view.initiator_offer.extend(new_items)
@@ -2009,9 +2251,16 @@ class ShopRodSelect(discord.ui.Select):
              
         economy.update_balance(interaction.user.id, -price)
         
-        cursor = self.cog.conn.cursor()
-        cursor.execute("INSERT INTO fishing_rods (user_id, rod_name) VALUES (?, ?)", (interaction.user.id, rod_name))
-        self.cog.conn.commit()
+        conn = self.cog.get_conn()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO fishing_rods (user_id, rod_name) VALUES (%s, %s)", (interaction.user.id, rod_name))
+                conn.commit()
+            finally:
+                 if conn.is_connected():
+                    cursor.close()
+                    conn.close()
         
         await interaction.response.send_message(f"✅ Successfully bought **{rod_name}**!", ephemeral=True)
         await interaction.message.edit(embed=self.view.build_embed(), view=self.view)
@@ -2074,9 +2323,16 @@ class RodEquipView(discord.ui.View):
             
         rod_name = interaction.data["values"][0]
         
-        cursor = self.cog.conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO fishing_profile (user_id, equipped_rod) VALUES (?, ?)', (self.user.id, rod_name))
-        self.cog.conn.commit()
+        conn = self.cog.get_conn()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                cursor.execute('INSERT INTO fishing_profile (user_id, equipped_rod) VALUES (%s, %s) ON DUPLICATE KEY UPDATE equipped_rod = %s', (self.user.id, rod_name, rod_name))
+                conn.commit()
+            finally:
+                 if conn.is_connected():
+                    cursor.close()
+                    conn.close()
         
         await interaction.response.send_message(f"✅ Equipped **{rod_name}**!", ephemeral=True)
         
@@ -2376,15 +2632,23 @@ class FishingForgeView(discord.ui.View):
                     self.cog.update_rod_level(user_id, rod_name, 0)
                     result_text = "Gagal! Level **RESET** ke +0."
                 elif risk == "destroy":
-                    cursor = self.cog.conn.cursor()
-                    cursor.execute('DELETE FROM fishing_rods WHERE user_id = ? AND rod_name = ?', (user_id, rod_name))
+                    conn = self.cog.get_conn()
+                    if conn:
+                        try:
+                            cursor = conn.cursor()
+                            cursor.execute('DELETE FROM fishing_rods WHERE user_id = %s AND rod_name = %s', (user_id, rod_name))
+                            
+                            # Check if equipped, if so, equip Common Rod
+                            equipped = self.cog.get_equipped_rod(user_id)
+                            if equipped == rod_name:
+                                cursor.execute('UPDATE fishing_profile SET equipped_rod = %s WHERE user_id = %s', ("Common Rod", user_id))
+                                
+                            conn.commit()
+                        finally:
+                             if conn.is_connected():
+                                cursor.close()
+                                conn.close()
                     
-                    # Check if equipped, if so, equip Common Rod
-                    equipped = self.cog.get_equipped_rod(user_id)
-                    if equipped == rod_name:
-                        cursor.execute('UPDATE fishing_profile SET equipped_rod = ? WHERE user_id = ?', ("Common Rod", user_id))
-                        
-                    self.cog.conn.commit()
                     result_text = "💥 **GAGAL TOTAL!** Rod **HANCUR** berkeping-keping! 💀"
                     self.selected_rod = None # Reset selection
                     
@@ -2420,24 +2684,37 @@ class ConfirmSalvageView(discord.ui.View):
     @discord.ui.button(label="✅ YA, SALVAGE", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
-        cursor = self.salvage_view.cog.conn.cursor()
         
-        # Execute Deletion
-        if self.selected_ids:
-            for fid in self.selected_ids:
-                 cursor.execute('DELETE FROM fish_inventory WHERE id = ?', (fid,))
-        elif self.rarity:
-            cursor.execute('DELETE FROM fish_inventory WHERE user_id = ? AND rarity = ?', (self.salvage_view.original_interaction.user.id, self.rarity))
-        else:
-            # Salvage All
-            cursor.execute('DELETE FROM fish_inventory WHERE user_id = ?', (self.salvage_view.original_interaction.user.id,))
+        conn = self.salvage_view.cog.get_conn()
+        if not conn:
+             await interaction.followup.send("❌ Database Error", ephemeral=True)
+             return
              
-        self.salvage_view.cog.conn.commit()
-        self.salvage_view.cog.add_material(interaction.user.id, "Scrap Metal", self.total_scrap)
+        try:
+            cursor = conn.cursor()
+            
+            # Execute Deletion
+            if self.selected_ids:
+                for fid in self.selected_ids:
+                     cursor.execute('DELETE FROM fish_inventory WHERE id = %s', (fid,))
+            elif self.rarity:
+                cursor.execute('DELETE FROM fish_inventory WHERE user_id = %s AND rarity = %s', (self.salvage_view.original_interaction.user.id, self.rarity))
+            else:
+                # Salvage All
+                cursor.execute('DELETE FROM fish_inventory WHERE user_id = %s', (self.salvage_view.original_interaction.user.id,))
+                 
+            conn.commit()
+            
+            self.salvage_view.cog.add_material(interaction.user.id, "Scrap Metal", self.total_scrap)
+            
+            # Update Parent View
+            cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = %s ORDER BY id DESC', (self.salvage_view.original_interaction.user.id,))
+            self.salvage_view.all_rows = cursor.fetchall()
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
         
-        # Update Parent View
-        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (self.salvage_view.original_interaction.user.id,))
-        self.salvage_view.all_rows = cursor.fetchall()
         self.salvage_view.max_pages = (len(self.salvage_view.all_rows) - 1) // self.salvage_view.items_per_page + 1
         if self.salvage_view.page >= self.salvage_view.max_pages: self.salvage_view.page = max(0, self.salvage_view.max_pages - 1)
         
@@ -2554,7 +2831,11 @@ class FishingSalvageView(discord.ui.View):
 
     async def select_callback(self, interaction: discord.Interaction):
         selected_ids = interaction.data["values"]
-        cursor = self.cog.conn.cursor()
+        
+        conn = self.cog.get_conn()
+        if not conn:
+             await interaction.response.send_message("❌ Database Error", ephemeral=True)
+             return
         
         # Handle Select All
         if "select_all" in selected_ids:
@@ -2575,31 +2856,40 @@ class FishingSalvageView(discord.ui.View):
                 view=confirm_view,
                 ephemeral=True
             )
+            if conn.is_connected(): conn.close()
             return
 
         total_scrap = 0
         deleted_count = 0
         
-        for fid in selected_ids:
-            # Get fish details to verify ownership (paranoid check)
-            cursor.execute('SELECT id FROM fish_inventory WHERE id = ? AND user_id = ?', (fid, self.original_interaction.user.id))
-            if cursor.fetchone():
-                # Delete fish
-                cursor.execute('DELETE FROM fish_inventory WHERE id = ?', (fid,))
-                
-                # Calculate Scrap (Random 1-3)
-                scrap = random.randint(1, 3)
-                total_scrap += scrap
-                deleted_count += 1
-        
-        self.cog.conn.commit()
-        self.cog.add_material(self.original_interaction.user.id, "Scrap Metal", total_scrap)
-        
-        await interaction.response.send_message(f"✅ Berhasil men-salvage **{deleted_count}** ikan menjadi **{total_scrap}x Scrap Metal** 🔩!", ephemeral=True)
-        
-        # Refresh data
-        cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = ? ORDER BY id DESC', (self.original_interaction.user.id,))
-        self.all_rows = cursor.fetchall()
+        try:
+            cursor = conn.cursor()
+            
+            for fid in selected_ids:
+                # Get fish details to verify ownership (paranoid check)
+                cursor.execute('SELECT id FROM fish_inventory WHERE id = %s AND user_id = %s', (fid, self.original_interaction.user.id))
+                if cursor.fetchone():
+                    # Delete fish
+                    cursor.execute('DELETE FROM fish_inventory WHERE id = %s', (fid,))
+                    
+                    # Calculate Scrap (Random 1-3)
+                    scrap = random.randint(1, 3)
+                    total_scrap += scrap
+                    deleted_count += 1
+            
+            conn.commit()
+            self.cog.add_material(self.original_interaction.user.id, "Scrap Metal", total_scrap)
+            
+            await interaction.response.send_message(f"✅ Berhasil men-salvage **{deleted_count}** ikan menjadi **{total_scrap}x Scrap Metal** 🔩!", ephemeral=True)
+            
+            # Refresh data
+            cursor.execute('SELECT id, fish_name, rarity, weight, price FROM fish_inventory WHERE user_id = %s ORDER BY id DESC', (self.original_interaction.user.id,))
+            self.all_rows = cursor.fetchall()
+        finally:
+             if conn.is_connected():
+                cursor.close()
+                conn.close()
+
         self.max_pages = (len(self.all_rows) - 1) // self.items_per_page + 1
         if self.page >= self.max_pages: self.page = max(0, self.max_pages - 1)
         
