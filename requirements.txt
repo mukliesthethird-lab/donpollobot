@@ -17,6 +17,7 @@ idna==3.10
 lyricsgenius==3.7.2
 multidict==6.4.3
 mysql-connector-python
+aiomysql
 propcache==0.3.1
 pycparser==2.22
 PyNaCl==1.6.0
