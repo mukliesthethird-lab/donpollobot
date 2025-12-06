@@ -1263,6 +1263,20 @@ class Fishing(commands.Cog):
             cursor = conn.cursor()
             now = datetime.now()
             
+            # 1. Sync Date Logic with generate_quests (Daily Reset 12:00 PM)
+            today_reset = now.replace(hour=12, minute=0, second=0, microsecond=0)
+            if now < today_reset:
+                current_daily_start = today_reset - timedelta(days=1)
+            else:
+                current_daily_start = today_reset
+            
+            daily_key = current_daily_start.strftime('%Y-%m-%d')
+            
+            # 2. Sync Weekly Logic (Reset Saturday)
+            days_since_saturday = (now.weekday() - 5) % 7
+            start_of_week_date = (now - timedelta(days=days_since_saturday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            weekly_key = start_of_week_date.strftime('%Y-%m-%d')
+            
             # Fetch Active Quests
             cursor.execute('''
                 SELECT id, quest_type, target_criteria, target_value, progress, reward_amount, is_claimed, quest_period, reward_type, reward_name, expiration_date
@@ -1271,9 +1285,9 @@ class Fishing(commands.Cog):
                 AND (
                     (quest_period = 'daily' AND created_at = %s)
                     OR
-                    (quest_period = 'weekly' AND created_at >= %s)
+                    (quest_period = 'weekly' AND created_at = %s)
                 )
-            ''', (interaction.user.id, now.strftime('%Y-%m-%d'), (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d')))
+            ''', (interaction.user.id, daily_key, weekly_key))
             
             quests = cursor.fetchall()
             
