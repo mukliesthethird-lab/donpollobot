@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import yt_dlp
 import asyncio
+import os
 import json
 import time
 import random
@@ -645,37 +646,40 @@ class Music(commands.Cog):
         self.init_genius()
 
     def init_spotify(self):
-        try:
-            with open('config.json') as f:
-                config = json.load(f)
-            if 'spotify_client_id' in config and 'spotify_client_secret' in config:
+        client_id = os.getenv('SPOTIFY_CLIENT_ID')
+        client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
+
+        if client_id and client_secret:
+            try:
                 self.spotify = spotipy.Spotify(
                     auth_manager=SpotifyClientCredentials(
-                        client_id=config['spotify_client_id'],
-                        client_secret=config['spotify_client_secret']
+                        client_id=client_id,
+                        client_secret=client_secret
                     )
                 )
-                print("✅ Spotify client successfully initialized")
-        except Exception:
-            print("⚠️ Spotify credentials not found/valid in config.json.")
+                print("✅ Spotify client successfully initialized from .env")
+            except Exception as e:
+                print(f"⚠️ Failed to initialize Spotify: {e}")
+        else:
+            print("⚠️ Spotify credentials not found in .env (SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET)")
 
     def init_genius(self):
-        """Initialize Genius client from config.json."""
-        try:
-            with open('config.json') as f:
-                config = json.load(f)
-            if 'genius_api_token' in config and config['genius_api_token']:
+        """Initialize Genius client from .env."""
+        token = os.getenv('GENIUS_TOKEN')
+        
+        if token:
+            try:
                 self.genius = lyricsgenius.Genius(
-                    config['genius_api_token'],
+                    token,
                     remove_section_headers=True,
                     skip_non_songs=True,
                     excluded_terms=["(Remix)", "(Live)"]
                 )
-                print("✅ Genius client successfully initialized")
-            else:
-                print("⚠️ Genius token not found in config.json. Lyrics feature disabled.")
-        except Exception:
-            print("⚠️ Failed to load Genius token from config.json.")
+                print("✅ Genius client successfully initialized from .env")
+            except Exception as e:
+                print(f"⚠️ Failed to initialize Genius: {e}")
+        else:
+            print("⚠️ Genius token not found in .env (GENIUS_TOKEN). Lyrics feature disabled.")
 
     def get_player(self, guild_id: int) -> MusicPlayer:
         if guild_id not in self.players:
