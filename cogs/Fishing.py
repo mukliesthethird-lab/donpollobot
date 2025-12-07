@@ -1222,6 +1222,10 @@ class Fishing(commands.Cog):
             await interaction.response.send_message("❌ You cannot trade with bots!", ephemeral=True)
             return
 
+        view = TradeChallengeView(self, interaction.user, user)
+        await interaction.response.send_message(f"🤝 {user.mention}, **{interaction.user.name}** mengajakmu Trade!", view=view)
+        view.message = await interaction.original_response()
+
     def format_quest_desc(self, q_type, criteria, target):
         if q_type == "catch_any":
             return f"Tangkap {target} Ikan Apa Saja"
@@ -2130,10 +2134,26 @@ class TradeRemoveSelectView(discord.ui.View):
         
 class TradeChallengeView(discord.ui.View):
     def __init__(self, cog, initiator, target):
-        super().__init__(timeout=60)
+        super().__init__(timeout=15)
         self.cog = cog
         self.initiator = initiator
         self.target = target
+        self.message = None
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        
+        timeout_embed = discord.Embed(
+            description=f"❌ **Trade Offer Expired**\n{self.target.mention} took too long to respond (15s).",
+            color=discord.Color.red()
+        )
+        
+        if self.message:
+            await self.message.edit(content=None, embed=timeout_embed, view=self)
+        else:
+            # Fallback if message wasn't stored properly, though accept/decline usually handle it
+            pass
 
     @discord.ui.button(label="✅ Accept", style=discord.ButtonStyle.success)
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
