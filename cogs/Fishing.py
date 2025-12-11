@@ -2261,6 +2261,191 @@ class ShopTabButton(discord.ui.Button):
         view.update_buttons()
         await interaction.response.edit_message(embed=view.build_embed(), view=view)
 
+class ShopQuantityModal(discord.ui.Modal):
+    """Modal untuk input quantity setiap item yang dipilih"""
+    def __init__(self, cog, user, selected_items: list, shop_view):
+        super().__init__(title="🛒 Masukkan Jumlah Item")
+        self.cog = cog
+        self.user = user
+        self.selected_items = selected_items[:5]  # Discord limit: max 5 TextInputs
+        self.shop_view = shop_view
+        self.input_fields = []
+        
+        # Add TextInput for each selected item
+        for item_name in self.selected_items:
+            price = self._get_item_price(item_name)
+            emoji = self._get_item_emoji(item_name)
+            field = discord.ui.TextInput(
+                label=f"{emoji} {item_name} (💰 {price:,}/pcs)",
+                placeholder="Masukkan jumlah (1-99)",
+                default="1",
+                max_length=2,
+                required=True
+            )
+            self.input_fields.append((item_name, field))
+            self.add_item(field)
+    
+    def _get_item_price(self, item_name: str) -> int:
+        if item_name in self.cog.buff_item_data:
+            return self.cog.buff_item_data[item_name]['price']
+        elif item_name == "Lucky Charm":
+            return 100000
+        elif item_name == "Magic Pearl":
+            return 250000
+        return 0
+    
+    def _get_item_emoji(self, item_name: str) -> str:
+        if item_name in self.cog.buff_item_data:
+            return self.cog.buff_item_data[item_name]['emoji']
+        elif item_name == "Lucky Charm":
+            return "🍀"
+        elif item_name == "Magic Pearl":
+            return "🔮"
+        return "📦"
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Parse quantities from input fields
+        cart = {}
+        for item_name, field in self.input_fields:
+            try:
+                qty = int(field.value)
+                if qty < 1:
+                    qty = 1
+                elif qty > 99:
+                    qty = 99
+                cart[item_name] = qty
+            except ValueError:
+                cart[item_name] = 1
+        
+        # Show confirmation view
+        confirm_view = ShopConfirmView(self.cog, self.user, cart, self.shop_view)
+        embed = confirm_view.build_embed()
+        await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
+
+
+class ShopConfirmView(discord.ui.View):
+    """View konfirmasi sebelum pembelian"""
+    def __init__(self, cog, user, cart: dict, shop_view):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.user = user
+        self.cart = cart  # {"Rokok Surya": 2, "Kail Mata Dua": 3, ...}
+        self.shop_view = shop_view
+    
+    def _get_item_price(self, item_name: str) -> int:
+        if item_name in self.cog.buff_item_data:
+            return self.cog.buff_item_data[item_name]['price']
+        elif item_name == "Lucky Charm":
+            return 100000
+        elif item_name == "Magic Pearl":
+            return 250000
+        return 0
+    
+    def _get_item_emoji(self, item_name: str) -> str:
+        if item_name in self.cog.buff_item_data:
+            return self.cog.buff_item_data[item_name]['emoji']
+        elif item_name == "Lucky Charm":
+            return "🍀"
+        elif item_name == "Magic Pearl":
+            return "🔮"
+        return "📦"
+    
+    def _is_buff_item(self, item_name: str) -> bool:
+        return item_name in self.cog.buff_item_data
+    
+    def calculate_total(self) -> int:
+        total = 0
+        for item_name, qty in self.cart.items():
+            total += self._get_item_price(item_name) * qty
+        return total
+    
+    def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="🛒 Konfirmasi Pembelian",
+            description="Apakah kamu yakin ingin membeli item berikut?",
+            color=discord.Color.gold()
+        )
+        
+        # List items in cart
+        cart_text = ""
+        for item_name, qty in self.cart.items():
+            emoji = self._get_item_emoji(item_name)
+            price = self._get_item_price(item_name)
+            subtotal = price * qty
+            cart_text += f"{emoji} **{item_name}** x{qty} = 💰 {subtotal:,}\n"
+        
+        embed.add_field(name="📦 Keranjang", value=cart_text, inline=False)
+        
+        # Total
+        total = self.calculate_total()
+        embed.add_field(name="💰 Total Harga", value=f"**{total:,}** coins", inline=False)
+        
+        # User balance
+        economy = self.cog.get_economy()
+        bal = economy.get_balance(self.user.id) if economy else 0
+        embed.set_footer(text=f"Saldo Anda: {bal:,} coins")
+        
+        return embed
+    
+    @discord.ui.button(label="✅ Beli Sekarang", style=discord.ButtonStyle.success)
+    async def confirm_purchase(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("❌ Ini bukan transaksi kamu!", ephemeral=True)
+            return
+        
+        economy = self.cog.get_economy()
+        if not economy:
+            await interaction.response.send_message("❌ Economy system error.", ephemeral=True)
+            return
+        
+        total = self.calculate_total()
+        bal = economy.get_balance(self.user.id)
+        
+        if bal < total:
+            await interaction.response.send_message(f"❌ Duit lu kurang bos! Butuh {total:,} tapi saldo cuma {bal:,}", ephemeral=True)
+            return
+        
+        # Deduct money
+        economy.update_balance(self.user.id, -total)
+        
+        # Add items to inventory
+        purchased_text = ""
+        for item_name, qty in self.cart.items():
+            emoji = self._get_item_emoji(item_name)
+            if self._is_buff_item(item_name):
+                self.cog.add_item(self.user.id, item_name, qty)
+            else:
+                self.cog.add_material(self.user.id, item_name, qty)
+            purchased_text += f"{emoji} **{item_name}** x{qty}\n"
+        
+        # Success embed
+        success_embed = discord.Embed(
+            title="✅ Pembelian Berhasil!",
+            description=f"Kamu telah membeli:\n{purchased_text}\n💰 Total: **{total:,}** coins",
+            color=discord.Color.green()
+        )
+        
+        new_bal = economy.get_balance(self.user.id)
+        success_embed.set_footer(text=f"Saldo sekarang: {new_bal:,} coins")
+        
+        await interaction.response.edit_message(embed=success_embed, view=None)
+        
+        # Refresh shop view
+        try:
+            if self.shop_view and hasattr(self.shop_view, 'message'):
+                await self.shop_view.message.edit(embed=self.shop_view.build_embed(), view=self.shop_view)
+        except:
+            pass
+    
+    @discord.ui.button(label="❌ Batal", style=discord.ButtonStyle.danger)
+    async def cancel_purchase(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("❌ Ini bukan transaksi kamu!", ephemeral=True)
+            return
+        
+        await interaction.response.edit_message(content="❌ Pembelian dibatalkan.", embed=None, view=None)
+
+
 class ShopItemSelect(discord.ui.Select):
     def __init__(self, cog, user, row):
         options = []
@@ -2277,7 +2462,7 @@ class ShopItemSelect(discord.ui.Select):
         options.append(discord.SelectOption(label="Lucky Charm", description="💰 100,000 - Increase Forge Chance", value="Lucky Charm", emoji="🍀"))
         options.append(discord.SelectOption(label="Magic Pearl", description="💰 250,000 - Forge Material", value="Magic Pearl", emoji="🔮"))
             
-        super().__init__(placeholder="Pilih item untuk dibeli...", min_values=1, max_values=1, options=options, row=row)
+        super().__init__(placeholder="Pilih item (bisa lebih dari 1)...", min_values=1, max_values=len(options), options=options, row=row)
         self.cog = cog
         self.user_obj = user
 
@@ -2286,39 +2471,11 @@ class ShopItemSelect(discord.ui.Select):
             await interaction.response.send_message("❌ Not your session!", ephemeral=True)
             return
 
-        item_name = self.values[0]
-        price = 0
-        is_buff = False
+        selected_items = self.values
         
-        if item_name in self.cog.buff_item_data:
-            price = self.cog.buff_item_data[item_name]['price']
-            is_buff = True
-        elif item_name == "Lucky Charm":
-            price = 100000
-        elif item_name == "Magic Pearl":
-            price = 250000
-        
-        economy = self.cog.get_economy()
-        if not economy:
-             await interaction.response.send_message("❌ Economy system error.", ephemeral=True)
-             return
-
-        bal = economy.get_balance(interaction.user.id)
-        
-        if bal < price:
-            await interaction.response.send_message(f"❌ Duit lu kurang bos! Butuh {price:,}", ephemeral=True)
-            return
-
-        economy.update_balance(interaction.user.id, -price)
-        
-        if is_buff:
-            self.cog.add_item(interaction.user.id, item_name, 1)
-        else:
-            self.cog.add_material(interaction.user.id, item_name, 1)
-        
-        await interaction.response.send_message(f"✅ Berhasil membeli **{item_name}**!", ephemeral=True)
-        # Refresh View (Balance update)
-        await interaction.message.edit(embed=self.view.build_embed(), view=self.view)
+        # Show quantity modal
+        modal = ShopQuantityModal(self.cog, self.user_obj, selected_items, self.view)
+        await interaction.response.send_modal(modal)
 
 class ShopRodSelect(discord.ui.Select):
     def __init__(self, cog, user, row):
